@@ -136,21 +136,71 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
     return null; // 漢字表記かつ辞書に無く、読みが特定できない
   }
 
-  function candidatesFor(kana){
-    const out = [];
-    WORDS.forEach((e,i) => { if(!usedReadings.has(e.r) && startKana(e.r) === kana) out.push(i); });
-    return out;
+  // 語彙が数万語規模になったため、「かな→その音で始まる語」の索引を読み込み時に一度だけ作り、
+  // 候補列挙のたびに全語をなめないようにする。
+  let wordsByKana = new Map();
+  function buildWordIndex(){
+    wordsByKana = new Map();
+    for(const e of WORDS){
+      const k = startKana(e.r);
+      if(!k) continue;
+      if(!wordsByKana.has(k)) wordsByKana.set(k, []);
+      wordsByKana.get(k).push(e);
+    }
+  }
+  function candidatesFor(kana, used){
+    return (wordsByKana.get(kana) || []).filter(e => !used.has(e.r));
+  }
+  // 使用済みを考慮しない、おおよその「かな→語数」。深い先読みの枝刈り(有望な候補の絞り込み)にのみ使う概算値。
+  function kanaSizeApprox(kana){
+    return kana ? (wordsByKana.get(kana) || []).length : 0;
+  }
+
+  const LOOKAHEAD_BRANCH_CAP = 12; // 2手目以降で深掘りする候補数の上限(枝刈り)
+  const HARD_OUTER_CAP = 50;       // 一手目候補のうち、深く読むのは有望な上位何件までか
+  const HARD_LOOKAHEAD_DEPTH = 2;  // 0=1手先読み(従来通り) 1=2手先読み 2=3手先読み
+
+  // kana から始まる語を選ぶ番の人にとって「その後どれだけ選択肢が少ないか」を depth 手先まで評価する。
+  // depth<=0 ならその場の候補数をそのまま返す(=1手先読み相当)。depth>0 では、
+  // お互いが同じ基準(相手の選択肢を最も減らす手)で最適に打ち続けたと仮定して深く評価する。
+  // 候補数が多い場合は kanaSizeApprox の概算値で有望な候補だけに絞ってから再帰する(全探索は重すぎるため)。
+  function minimaxOptions(kana, used, depth){
+    const pool = candidatesFor(kana, used);
+    if(pool.length === 0 || depth <= 0) return pool.length;
+
+    let candidates = pool;
+    if(candidates.length > LOOKAHEAD_BRANCH_CAP){
+      candidates = [...pool].sort((a,b) => {
+        const ea = analyzeEnding(a.r), eb = analyzeEnding(b.r);
+        return kanaSizeApprox(ea.isN ? null : ea.kana) - kanaSizeApprox(eb.isN ? null : eb.kana);
+      }).slice(0, LOOKAHEAD_BRANCH_CAP);
+    }
+
+    let best = Infinity;
+    for(const e of candidates){
+      const end = analyzeEnding(e.r);
+      let val;
+      if(end.isN){
+        val = 0; // 相手を「ん」で終わる語に追い込めれば、それ以上ないくらい良い手
+      }else{
+        used.add(e.r);
+        val = minimaxOptions(end.kana, used, depth - 1);
+        used.delete(e.r);
+      }
+      if(val < best) best = val;
+      if(best === 0) break;
+    }
+    return best;
   }
 
   function pickAiMove(kana, strength){
-    const pool = candidatesFor(kana);
+    const pool = candidatesFor(kana, usedReadings);
     if(pool.length === 0) return null;
 
-    const scored = pool.map(i => {
-      const e = WORDS[i];
+    const scored = pool.map(e => {
       const end = analyzeEnding(e.r);
-      const opponentOptions = end.isN ? -1 : candidatesFor(end.kana).filter(j => j !== i).length;
-      return {e, isN: end.isN, opponentOptions};
+      const opponentOptions = end.isN ? -1 : candidatesFor(end.kana, usedReadings).length;
+      return {e, end, isN: end.isN, opponentOptions};
     });
 
     const safe = scored.filter(s => !s.isN);
@@ -164,9 +214,19 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       const mid = usable.slice(0, Math.max(1, Math.ceil(usable.length*0.6)));
       return mid[Math.floor(Math.random()*mid.length)];
     }
-    // hard: 相手の選択肢が一番少なくなる(=詰ませやすい)手を優先
+
+    // hard: まず1手先読み(opponentOptions)で有望な候補に絞り込み、その上位だけを
+    // 2〜3手先まで深掘りして最終決定する(合法手すべてを深く読むと重すぎるため)。
     usable.sort((a,b) => a.opponentOptions - b.opponentOptions);
-    const best = usable.filter(s => s.opponentOptions === usable[0].opponentOptions);
+    const deepPool = usable.slice(0, HARD_OUTER_CAP);
+    for(const s of deepPool){
+      if(s.isN){ s.deepScore = 0; continue; }
+      usedReadings.add(s.e.r);
+      s.deepScore = minimaxOptions(s.end.kana, usedReadings, HARD_LOOKAHEAD_DEPTH);
+      usedReadings.delete(s.e.r);
+    }
+    deepPool.sort((a,b) => a.deepScore - b.deepScore);
+    const best = deepPool.filter(s => s.deepScore === deepPool[0].deepScore);
     return best[Math.floor(Math.random()*best.length)];
   }
 
@@ -229,8 +289,7 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       renderGameOver('user', '辞書番が読みが「ん」で終わる言葉を選ばざるを得ませんでした。');
       setBusy(true); return;
     }
-    const aiEnding = analyzeEnding(move.e.r);
-    requiredKana = aiEnding.kana;
+    requiredKana = move.end.kana;
     updateMedallion();
     setBusy(false);
     inputEl.focus();
@@ -244,14 +303,34 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
     inputEl.focus();
   }
 
+  // words-core.json(手作業・日本語の意味つき)と words-auto.json(自動取得分)を
+  // 両方読み込み、読み(reading)が重複する場合は words-core.json を優先してマージする。
+  // words-auto.json は無くても(未生成でも)動くようにする。
+  async function loadWords(){
+    const [coreRes, autoRes] = await Promise.allSettled([
+      fetch('words-core.json'),
+      fetch('words-auto.json'),
+    ]);
+    const core = coreRes.status === 'fulfilled' && coreRes.value.ok ? await coreRes.value.json() : [];
+    const auto = autoRes.status === 'fulfilled' && autoRes.value.ok ? await autoRes.value.json() : [];
+
+    const seen = new Set();
+    const merged = [];
+    for(const e of core){ if(!seen.has(e.r)){ seen.add(e.r); merged.push(e); } }
+    for(const e of auto){ if(!seen.has(e.r)){ seen.add(e.r); merged.push(e); } }
+
+    if(core.length === 0 && auto.length === 0) throw new Error('no words loaded');
+    return merged;
+  }
+
   async function init(){
     try{
-      const res = await fetch('words.json');
-      WORDS = await res.json();
+      WORDS = await loadWords();
     }catch(e){
       WORDS = [];
-      showToast('words.json の読み込みに失敗しました(ローカルサーバー経由で開いてください)');
+      showToast('辞書データの読み込みに失敗しました(ローカルサーバー経由で開いてください)');
     }
+    buildWordIndex();
     wordCountEl.textContent = WORDS.length;
     updateScore(); updateMedallion();
     setBusy(false);
