@@ -1,0 +1,13 @@
+{
+  "name": "shiritori-dojo",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "fetch-words": "node scripts/fetch-words.mjs",
+    "serve": "npx serve ."
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10"
+  }
+}

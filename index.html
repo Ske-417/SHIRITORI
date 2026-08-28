@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SHIRITORI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="title-row">
+      <div class="kanban"><span class="eyebrow">SHIRITORI DOJO</span>辞書番</div>
+      <div class="offline-tag">AIとしりとりをしよう</div>
+    </div>
+    <div class="subtitle">あなたの言葉は実在するものとして信頼します。辞書番は内蔵辞書<span id="wordCount">0</span>語の中から、あなたの逃げ場が一番少ない音を選んで返してきます。</div>
+
+    <div class="control-row">
+      <div class="medallion-wrap">
+        <div class="medallion" id="medallion">―</div>
+        <div class="medallion-label" id="medallionLabel">最初の<br>ことばへ</div>
+      </div>
+      <div class="score">
+        <div class="you">客<span class="num" id="userScore">0</span></div>
+        <div class="ai">番<span class="num" id="aiScore">0</span></div>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      強さ：
+      <select id="strengthSelect">
+        <option value="easy">やさしめ</option>
+        <option value="normal">ふつう</option>
+        <option value="hard" selected>めちゃ強い</option>
+      </select>
+      <button class="restart" id="restartBtn">はじめから</button>
+    </div>
+  </header>
+
+  <main id="chain">
+    <div class="empty-hint" id="emptyHint">
+      <div class="kanban-mini">— 対局開始 —</div>
+      ひらがな・カタカナで、ことばを入力してください。<br>
+      読みが「ん」で終わったら、その場で負けです。
+    </div>
+  </main>
+
+  <div class="input-bar">
+    <input id="wordInput" type="text" placeholder="ことばを入力…" autocomplete="off">
+    <button id="submitBtn">送る</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
