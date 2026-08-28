@@ -64,10 +64,10 @@ npm run fetch-words
 ```
 
 これで `words-auto.json` が数万〜十万語規模に生成されます(現在のリポジトリ同梱データは
-約145,000語)。**このスクリプトの実行にAIやAPIトークンは一切使いません。GitHubから公開データを
-ダウンロードして加工するだけのビルドステップです。**
+約150,000語)。**このスクリプトの実行にAIやAPIトークンは一切使いません。GitHubやWikidataから
+公開データをダウンロードして加工するだけのビルドステップです。**
 
-抽出対象は5種類です:
+抽出対象は6種類です:
 
 - **一般名詞** … JMdict の「よく使われる」語のうち、品詞タグが名詞系(`n`, `n-adv`, `n-t`,
   `n-pref`, `n-suf`)のものだけ。形容詞・感動詞・表現(フレーズ)は含みません。
@@ -75,14 +75,23 @@ npm run fetch-words
 - **医学・化学系専門用語** … JMdict の `field` タグが `med`/`chem`/`biochem`/`pharm`/`anat`/
   `physiol`/`pathol`/`genet`/`dent`/`surg`/`embryo`/`vet` のいずれかの語(「よく使われる」条件は
   外している。専門用語はそもそも一般的な語ではないため)。
-- **神話** … JMdict の `field` タグが `grmyth`/`rommyth`/`chmyth`/`jpmyth`(ギリシャ/ローマ/
-  中国/日本神話)の語。ゼウス・ヘラクレスなど。
-- **固有名詞** … JMnedict から地名・組織名・企業名・作品名・海外の地名や著名人・神話上の
-  人物・架空のキャラクターなどを抽出します。**個人の実名を表す種別
+- **神話**(JMdict由来) … JMdict の `field` タグが `grmyth`/`rommyth`/`chmyth`/`jpmyth`
+  (ギリシャ/ローマ/中国/日本神話)の語。
+- **神話・架空の存在**(Wikidata由来) … [Wikidata](https://www.wikidata.org/)のSPARQL
+  エンドポイントから、「神」「神話・伝説の生物」「架空のキャラクター」に分類されている
+  項目のうち日本語ラベルが純粋なかなのものを抽出します。JMnedictのchar/myth種別だけでは
+  件数が少なすぎるため(合計300語程度)の補完です。Wikidataは日本語の短い説明文
+  (例: ゼウス→「ギリシャ神話の最高神」)を持つことが多く、それをそのまま意味欄に使い、
+  末尾に `[Wikidata:Q番号]` で出典を明記しています。ワンパンマンなどのアニメキャラクターも
+  多数含まれます。
+- **固有名詞**(JMnedict由来) … 地名・組織名・企業名・作品名・海外の地名や著名人・
+  神話上の人物・架空のキャラクターなどを抽出します。**個人の実名を表す種別
   (person/surname/given/fem/masc/unclass)は、JMnedict上で生没年などの伝記情報が
-  確認できる語(=著名人と判定できる語)だけを採用します。** JMnedictの姓/名/女性の名/
-  男性の名は単なる名前読みの辞書であり、著名かどうかとは無関係に大量の無名な人名を
-  含むため(実測: 伝記情報が付いている割合は女性の名で0.13%、名で0.04%程度)、
+  確認できる語(=著名人と判定できる語)だけを採用し、意味欄にはその伝記情報自体を
+  使います**(例: アインシュタイン→「Einstein, Albert (1879-1955; German-born
+  theoretical physicist)」。しりとり中にそのまま「誰なのか」が分かるようにするためです)。
+  JMnedictの姓/名/女性の名/男性の名は単なる名前読みの辞書であり、著名かどうかとは無関係に
+  大量の無名な人名を含むため(実測: 伝記情報が付いている割合は女性の名で0.13%、名で0.04%程度)、
   この条件を課さないと聞いたこともない人名がゲームに出てきてしまいます。
   一方、地名・組織名や、JMnedict自体が架空/神話上の存在として分類している種別
   (char/dei/fict/creat/myth/leg)には伝記情報を要求しません(分類自体が根拠のため)。
@@ -91,13 +100,17 @@ npm run fetch-words
 ### 既知のトレードオフ
 
 - JMdict由来の意味(gloss)は英語のみです。`words-auto.json` の一般名詞・ことわざ/故事成語・
-  専門用語・神話には `"(en) ..."` という注記付きで英語の意味がそのまま入ります。固有名詞は
-  英語の原音表記の代わりに「地名」「人名」などの種別ラベルを意味欄に入れています。
+  専門用語・神話(JMdict由来)には `"(en) ..."` という注記付きで英語の意味がそのまま入ります。
+  Wikidata由来の語は日本語の説明文(無ければ種別ラベル)+出典タグ、JMnedict由来の固有名詞は
+  伝記情報(人物)または種別ラベル(地名など)を意味欄に入れています。
 - 人名の著名性判定はJMnedictの伝記情報(生没年表記)の有無に頼っているため、フルネームの
   エントリには伝記情報があっても、姓だけの別エントリ(例: 「シェイクスピア」単体)には
   伝記情報が付いていないことがあり、その場合は姓単体のエントリは採用されません。
   無名な人名を出さないことを優先したトレードオフです。
-- JMdict/JMnedict は一般公開の辞書データであり、際どい語義や専門用語なども含まれます
+- Wikidataのラベルは漢字表記のみのことが多く、その場合は読み(ふりがな)が分からないため
+  対象外にしています(日本語ラベルが純粋なかなの項目だけを採用)。そのため、外来語由来の
+  神・妖怪・キャラクターに比べて日本古来の神話上の存在はやや少なめです。
+- JMdict/JMnedict/Wikidata は一般公開のデータであり、際どい語義や専門用語なども含まれます
   (人名以外は意図的にフィルタをかけていません)。必要であれば `scripts/fetch-words.mjs`
   側でフィルタ条件を追加してください。
 
@@ -111,8 +124,12 @@ npm run fetch-words
 
 ## ライセンス表記
 
-`words-auto.json` を JMdict/JMnedict由来のデータで生成した場合は、EDRDGの利用条件に従い
-クレジット表記(例: "This application uses the JMdict and JMnedict dictionary files.
-These files are the property of the Electronic Dictionary Research and
-Development Group, and are used in conformance with the Group's licence.")
-をどこかに残してください。
+- `words-auto.json` を JMdict/JMnedict由来のデータで生成した場合は、EDRDGの利用条件に従い
+  クレジット表記(例: "This application uses the JMdict and JMnedict dictionary files.
+  These files are the property of the Electronic Dictionary Research and
+  Development Group, and are used in conformance with the Group's licence.")
+  をどこかに残してください。
+- 神話・架空の存在の一部は [Wikidata](https://www.wikidata.org/) から取得しています。
+  Wikidataの構造化データは [CC0](https://creativecommons.org/publicdomain/zero/1.0/)
+  (パブリックドメイン相当)で提供されており、各語の意味欄末尾の `[Wikidata:Q番号]` から
+  個別の出典(`https://www.wikidata.org/wiki/Q番号`)を確認できます。
