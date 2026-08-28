@@ -316,14 +316,18 @@ const WIKIDATA_CATEGORIES = [
 const WIKIDATA_ENDPOINT = 'https://query.wikidata.org/sparql';
 const WIKIDATA_USER_AGENT = 'shiritori-dojo-fetch-words/1.0 (https://github.com/; educational hobby project)';
 
-async function sparql(query){
+// query.wikidata.org は共有の公開エンドポイントで、負荷状況により 502 等で
+// 一時的に失敗することがあるため、軽くリトライする。
+async function sparql(query, retries = 2){
   const url = `${WIKIDATA_ENDPOINT}?query=${encodeURIComponent(query)}`;
-  const res = await fetch(url, {
-    headers: { 'Accept': 'application/sparql-results+json', 'User-Agent': WIKIDATA_USER_AGENT }
-  });
-  if(!res.ok) throw new Error(`Wikidata SPARQL error: ${res.status}`);
-  const data = await res.json();
-  return data.results.bindings;
+  for(let attempt = 0; ; attempt++){
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/sparql-results+json', 'User-Agent': WIKIDATA_USER_AGENT }
+    });
+    if(res.ok) return (await res.json()).results.bindings;
+    if(attempt >= retries) throw new Error(`Wikidata SPARQL error: ${res.status}`);
+    await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+  }
 }
 
 async function fetchWikidataLabels(qid, directOnly){
@@ -332,16 +336,38 @@ async function fetchWikidataLabels(qid, directOnly){
   return sparql(query);
 }
 
+// Wikidataの「人間(Q5)」は全体で数百万件あり、素朴な P31 検索は必ずタイムアウトする。
+// 日本語版ウィキペディアに記事がある(=schema:isPartOf jawiki)ことで対象を絞り込み、
+// さらに sitelinks(記事が存在する言語版ウィキペディアの数)で足切りすることで、
+// 「広く知られている人物」だけをクエリ側で選別する。MIN_SITELINKS を上げるほど
+// 世界的に有名な人物に絞られ、クエリも軽くなる(下げすぎるとタイムアウトしやすい)。
+const WIKIDATA_HUMAN_MIN_SITELINKS = 12;
+async function fetchWikidataNotableHumans(){
+  const query = `SELECT ?item ?itemLabel WHERE {
+    ?article schema:about ?item ; schema:isPartOf <https://ja.wikipedia.org/> .
+    ?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sitelinks .
+    FILTER(?sitelinks >= ${WIKIDATA_HUMAN_MIN_SITELINKS})
+    ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
+  }`;
+  return sparql(query);
+}
+
 // 説明文はラベル取得とは別クエリでバッチ取得する(1クエリにまとめるとタイムアウトしやすいため)。
 async function fetchWikidataDescriptions(qids){
   const out = new Map();
-  const CHUNK = 300;
+  const CHUNK = 250;
   for(let i = 0; i < qids.length; i += CHUNK){
     const chunk = qids.slice(i, i + CHUNK);
     const values = chunk.map(q => `wd:${q}`).join(' ');
     const query = `SELECT ?item ?desc WHERE { VALUES ?item { ${values} } ?item schema:description ?desc . FILTER(LANG(?desc)='ja') }`;
-    const rows = await sparql(query);
-    for(const row of rows) out.set(row.item.value.split('/').pop(), row.desc.value);
+    try{
+      const rows = await sparql(query);
+      for(const row of rows) out.set(row.item.value.split('/').pop(), row.desc.value);
+    }catch(err){
+      // このチャンクだけ諦める(該当語は種別ラベルにフォールバックするので致命的ではない)。
+      console.warn(`  説明文取得チャンク(${i}-${i+chunk.length})が失敗したためスキップします: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 800)); // Wikidataへの負荷を抑えるための小休止
   }
   return out;
 }
@@ -379,6 +405,39 @@ async function extractWikidataBeings(seenReadings){
   return out;
 }
 
+// 日本語版ウィキペディアに記事を持ち、かつ一定数以上の言語版ウィキペディアでも
+// 取り上げられている(=広く知られている)人物をWikidataから抽出する。
+// JMnedictのperson/surname等(生没年の記載有無で判定)より遥かに件数・情報量が多い。
+// 日本語ラベルが漢字表記のみの人物(日本の歴史上の人物など)は読みが分からず対象外になる
+// (README参照)。意味欄にはWikidataの日本語説明文をそのまま使う。
+async function extractWikidataHumans(seenReadings){
+  try{
+    const rows = await fetchWikidataNotableHumans();
+    const seenLocal = new Set();
+    const candidates = [];
+    for(const row of rows){
+      const hira = toHiragana(row.itemLabel.value);
+      if(!KANA_ONLY.test(hira) || hira.length < 2) continue;
+      if(seenLocal.has(hira)) continue;
+      seenLocal.add(hira);
+      candidates.push({ w: row.itemLabel.value, r: hira, qid: row.item.value.split('/').pop() });
+    }
+    const descMap = await fetchWikidataDescriptions(candidates.map(c => c.qid));
+    const out = [];
+    let added = 0;
+    for(const c of candidates){
+      const desc = descMap.get(c.qid);
+      const m = desc ? `${desc} [Wikidata:${c.qid}]` : `著名人 [Wikidata:${c.qid}]`;
+      if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m })) added++;
+    }
+    console.log(`Wikidata(著名人): ${added}語(説明文あり ${descMap.size}件)`);
+    return out;
+  }catch(err){
+    console.warn(`Wikidata(著名人)の取得に失敗しました: ${err.message} — このカテゴリはスキップします`);
+    return [];
+  }
+}
+
 async function main(){
   console.log('最新リリース情報を取得中…');
   const [commonAsset, fullAsset, neAsset] = await Promise.all([
@@ -393,15 +452,16 @@ async function main(){
     downloadJson(neAsset),
   ]);
 
-  // Wikidataは神話・架空の存在について日本語の説明文を持つことが多く、JMdict/JMnedictの
-  // 単純な種別ラベルより情報量が多いため、読みが重複した場合はWikidata側を優先する
-  // (=先に登録する)順序にしている。
+  // Wikidataは神話・架空の存在/著名人について日本語の説明文を持つことが多く、
+  // JMdict/JMnedictの単純な種別ラベルより情報量が多いため、読みが重複した場合は
+  // Wikidata側を優先する(=先に登録する)順序にしている。
   const seenReadings = new Set();
   const out = [
     ...extractNouns(commonData, seenReadings),
     ...extractProverbsAndYoji(fullData, seenReadings),
     ...extractTechnicalTerms(fullData, seenReadings),
     ...(await extractWikidataBeings(seenReadings)),
+    ...(await extractWikidataHumans(seenReadings)),
     ...extractMythology(fullData, seenReadings),
     ...extractProperNouns(neData, seenReadings),
   ];
