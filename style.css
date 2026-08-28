@@ -35,6 +35,12 @@ body{
   border-left:1px solid var(--line);
   border-right:1px solid var(--line);
 }
+.content{
+  display:flex;
+  flex-direction:column;
+  flex:1;
+  min-width:0;
+}
 
 header{
   padding:26px 22px 18px;
@@ -303,4 +309,44 @@ main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
 @media (max-width:420px){
   .card{max-width:92%; padding-right:40px;}
   .score{gap:12px;}
+}
+
+/* PCブラウザ向け: 640px固定の1カラムから、左にヘッダー(道場の案内板)、
+   右に対局ログという2カラムのフルスクリーンレイアウトに切り替える。 */
+@media (min-width:860px){
+  body{padding:0;}
+  .app{
+    max-width:1600px;
+    flex-direction:row;
+    min-height:100vh;
+    height:100vh;
+    border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);
+  }
+  header{
+    width:340px;
+    flex-shrink:0;
+    height:100%;
+    overflow-y:auto;
+    border-bottom:none;
+    border-right:2px solid var(--ink);
+    padding:34px 28px 24px;
+  }
+  .kanban{font-size:29px;}
+  .subtitle{max-width:none;}
+  .content{height:100%; min-height:0;}
+  main{
+    max-width:1080px;
+    width:100%;
+    margin:0 auto;
+    padding:28px 32px 130px;
+  }
+  .input-bar{
+    max-width:1080px;
+    width:100%;
+    margin:0 auto;
+    padding:14px 32px 26px;
+  }
+  .card{max-width:min(86%, 640px);}
+  .thinking-card{max-width:min(66%, 480px);}
 }

@@ -37,17 +37,19 @@
     </div>
   </header>
 
-  <main id="chain">
-    <div class="empty-hint" id="emptyHint">
-      <div class="kanban-mini">— 対局開始 —</div>
-      ひらがな・カタカナで、ことばを入力してください。<br>
-      読みが「ん」で終わったら、その場で負けです。
-    </div>
-  </main>
+  <div class="content">
+    <main id="chain">
+      <div class="empty-hint" id="emptyHint">
+        <div class="kanban-mini">— 対局開始 —</div>
+        ひらがな・カタカナで、ことばを入力してください。<br>
+        読みが「ん」で終わったら、その場で負けです。
+      </div>
+    </main>
 
-  <div class="input-bar">
-    <input id="wordInput" type="text" placeholder="ことばを入力…" autocomplete="off">
-    <button id="submitBtn">送る</button>
+    <div class="input-bar">
+      <input id="wordInput" type="text" placeholder="ことばを入力…" autocomplete="off">
+      <button id="submitBtn">送る</button>
+    </div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
