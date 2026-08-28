@@ -72,8 +72,8 @@ npm install
 npm run fetch-words
 ```
 
-これで `words-auto.json` が数万〜十万語規模に生成されます(現在のリポジトリ同梱データは
-約151,000語)。**このスクリプトの実行にAIやAPIトークンは一切使いません。GitHubやWikidataから
+これで `words-auto.json` が数万〜数十万語規模に生成されます(現在のリポジトリ同梱データは
+約245,000語)。**このスクリプトの実行にAIやAPIトークンは一切使いません。GitHubやWikidataから
 公開データをダウンロードして加工するだけのビルドステップです。**
 
 抽出対象は7種類です:
@@ -81,9 +81,11 @@ npm run fetch-words
 - **一般名詞** … JMdict の「よく使われる」語のうち、品詞タグが名詞系(`n`, `n-adv`, `n-t`,
   `n-pref`, `n-suf`)のものだけ。形容詞・感動詞・表現(フレーズ)は含みません。
 - **ことわざ・故事成語** … JMdict の `misc` タグに `proverb` / `yoji` が付いた語。
-- **医学・化学系専門用語** … JMdict の `field` タグが `med`/`chem`/`biochem`/`pharm`/`anat`/
-  `physiol`/`pathol`/`genet`/`dent`/`surg`/`embryo`/`vet` のいずれかの語(「よく使われる」条件は
-  外している。専門用語はそもそも一般的な語ではないため)。
+- **専門用語**(分野横断) … JMdict の `field` タグが専門分野を示す語。医学・化学だけでなく、
+  数学・物理・法律・経済・コンピュータ・スポーツ・音楽・将棋/囲碁/麻雀など約90分野
+  (`scripts/fetch-words.mjs` の `FIELD_LABELS` 参照)から幅広く抽出します(「よく使われる」
+  条件は外している。専門用語はそもそも一般的な語ではないため)。意味欄は
+  `"[分野] (en) 英語のgloss"` の形式(例: 「[コンピュータ] (en) removable」)。
 - **神話**(JMdict由来) … JMdict の `field` タグが `grmyth`/`rommyth`/`chmyth`/`jpmyth`
   (ギリシャ/ローマ/中国/日本神話)の語。
 - **神話・架空の存在**(Wikidata由来) … [Wikidata](https://www.wikidata.org/)のSPARQL
