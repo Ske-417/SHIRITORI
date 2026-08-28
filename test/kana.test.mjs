@@ -20,6 +20,19 @@ test('analyzeEnding: 長音「ー」で終わる語は直前の音の母音に�
   assert.deepEqual(analyzeEnding('じゅーす'), {kana:'す', isN:false}); // 語尾は「す」で通常判定(長音は語中)
 });
 
+test('analyzeEnding: 長音の直前が拗音・小さい母音のときも正しく母音に変換する', () => {
+  // 「てぃー」「しょー」「ゅー」のような、外来語で頻出する 小さいかな+長音 の組み合わせ。
+  // VOWEL_MAP には小さいかなが無いため、SMALL_YOON で正規化してから引く必要がある。
+  assert.deepEqual(analyzeEnding('りーどしてぃー'), {kana:'い', isN:false}); // てぃ→い段(実例: リードシティー)
+  assert.deepEqual(analyzeEnding('ぱーてぃー'), {kana:'い', isN:false});     // パーティー
+  assert.deepEqual(analyzeEnding('でびゅー'), {kana:'う', isN:false});       // デビュー ゅ→ゆ→う段
+  assert.deepEqual(analyzeEnding('しょー'), {kana:'お', isN:false});         // ショー ょ→よ→お段
+});
+
+test('analyzeEnding: 歴史的仮名遣い(ゐ/ゑ)を含む長音も母音に変換できる', () => {
+  assert.deepEqual(analyzeEnding('ぶろーどうゑー'), {kana:'え', isN:false}); // ブロードウェー ゑ→え段
+});
+
 test('analyzeEnding: 拗音「ゃゅょ」で終わる語は や/ゆ/よ に正規化する', () => {
   assert.deepEqual(analyzeEnding('とんきゃ'), {kana:'や', isN:false});
   assert.deepEqual(analyzeEnding('ひゅ'), {kana:'ゆ', isN:false});
