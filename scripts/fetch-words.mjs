@@ -17,7 +17,9 @@
  * 抽出対象:
  *   1. 一般名詞      … jmdict-eng-common から品詞タグが名詞系のものだけ (よく使われる語のみ)
  *   2. ことわざ・故事成語 … jmdict-eng (フル版) から misc タグ "proverb" / "yoji" が付いた語
- *   3. 固有名詞      … jmnedict-all (人名・地名・組織名など) から種別ごとに上限を設けて抽出
+ *   3. 専門用語      … jmdict-eng (フル版) から field タグが医学・化学系の語
+ *   4. 固有名詞      … jmnedict-all (人名・地名・組織名など、海外の地名・著名人も含む) から
+ *                    種別ごとに上限を設けて抽出
  *
  * 注意:
  * - JMdict/JMnedict は Electronic Dictionary Research and Development Group (EDRDG) が
@@ -43,21 +45,28 @@ const KANA_ONLY = /^[ぁ-ゖー]+$/;
 // 名詞系タグのみを厳密に列挙する。
 const NOUN_POS = new Set(['n', 'n-adv', 'n-t', 'n-pref', 'n-suf', 'n-pr']);
 
-// 抽出する語数の上限。多すぎると辞書番の思考(先読み)が重くなるほか、
-// あまりに無名な語ばかりになってゲームとして破綻するため種別ごとに上限を設ける。
+// 抽出する語数の上限。種別ごとに設けているのは、無名すぎる語(人名の末端など)で
+// 辞書全体が埋まってゲームとして破綻するのを避けるため。値自体はここで調整できる。
 const CAPS = {
-  noun: 6000,
-  place: 4000,
-  organization: 5000,
-  station: 1500,
-  person: 2000,
-  surname: 3000,
-  given: 2000,
-  fem: 1500,
-  masc: 1000,
-  unclass: 500,
+  noun: 10000,
+  place: 15000,
+  organization: 8000,
+  station: 3000,
+  person: 15000,
+  surname: 8000,
+  given: 5000,
+  fem: 4000,
+  masc: 3000,
+  unclass: 1000,
 };
 const CAP_DEFAULT = Infinity; // company / product / work / group など元々件数が少ないものは無制限
+
+// JMdict の field タグのうち、医学・化学(および隣接する生物医学系)とみなすもの。
+// これらは専門用語なので「よく使われる(common)」条件を外して抽出する。
+const MEDICAL_CHEMISTRY_FIELDS = new Set([
+  'med', 'chem', 'biochem', 'pharm', 'anat', 'physiol', 'pathol',
+  'genet', 'dent', 'surg', 'embryo', 'vet',
+]);
 
 const NAME_TYPE_LABEL = {
   place: '地名', organization: '組織名', company: '企業名', product: '製品名',
@@ -158,6 +167,45 @@ function extractProverbsAndYoji(data, seenReadings){
   return out;
 }
 
+function extractTechnicalTerms(data, seenReadings){
+  const out = [];
+  for(const word of data.words){
+    const kana = word.kana && word.kana[0];
+    if(!kana) continue;
+    const isTarget = word.sense.some(s => (s.field || []).some(f => MEDICAL_CHEMISTRY_FIELDS.has(f)));
+    if(!isTarget) continue;
+
+    const reading = toHiragana(kana.text);
+    const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
+    if(!gloss) continue;
+    const kanji = word.kanji && word.kanji[0];
+
+    addEntry(out, seenReadings, Infinity, {
+      w: (kanji && kanji.text) || kana.text,
+      r: reading,
+      m: `(en) ${gloss.text}`,
+    });
+  }
+  console.log(`医学・化学系専門用語: ${out.length}語`);
+  return out;
+}
+
+// 生没年などの伝記情報(例: "(1879-1955; ...)")が翻訳文に含まれるかどうかで、
+// 「著名人らしさ」を大まかに判定する。JMnedictにはそれ以外の著名度指標が無いため。
+function looksNotable(translations){
+  return translations.some(t => t.translation.some(g => /\(\d{3,4}/.test(g.text)));
+}
+
+// 固有名詞の並び優先度。数値が小さいほど CAPS の上限に収まりやすい(=優先採用される)。
+//   0: 伝記情報があり著名人らしいと判定できるもの
+//   1: 漢字表記が無い(=海外由来の地名/名前である可能性が高い)もの
+//   2: それ以外
+function rankTier(cand){
+  if(cand.bio) return 0;
+  if(cand.type === 'place' && !cand.hasKanji) return 1;
+  return 2;
+}
+
 function primaryNameType(word){
   const types = new Set();
   for(const t of word.translation) for(const ty of (t.type || [])) types.add(ty);
@@ -166,7 +214,7 @@ function primaryNameType(word){
 }
 
 function extractProperNouns(data, seenReadings){
-  const buckets = new Map(); // type -> array of {w,r}
+  const buckets = new Map(); // type -> array of {w,r,hasKanji,bio,type}
   for(const word of data.words){
     const kana = word.kana && word.kana[0];
     if(!kana) continue;
@@ -175,16 +223,24 @@ function extractProperNouns(data, seenReadings){
     const reading = toHiragana(kana.text);
     if(!KANA_ONLY.test(reading) || reading.length < 2) continue;
     const kanji = word.kanji && word.kanji[0];
+    const cand = {
+      w: (kanji && kanji.text) || kana.text,
+      r: reading,
+      hasKanji: !!kanji,
+      bio: looksNotable(word.translation),
+      type,
+    };
     if(!buckets.has(type)) buckets.set(type, []);
-    buckets.get(type).push({ w: (kanji && kanji.text) || kana.text, r: reading });
+    buckets.get(type).push(cand);
   }
 
   const out = [];
   for(const type of NAME_TYPE_PRIORITY){
     const bucket = buckets.get(type);
     if(!bucket) continue;
-    // 短い読みほど平易で「知られている」名前である可能性が高いと見なし優先する
-    bucket.sort((a, b) => a.r.length - b.r.length);
+    // rankTier: 著名人(伝記情報あり)や海外由来(漢字表記なし)を優先して上限内に収める。
+    // Array#sort は安定ソートなので、同ティア内は元の並び順を保つ。
+    bucket.sort((a, b) => rankTier(a) - rankTier(b));
     const cap = CAPS[type] ?? CAP_DEFAULT;
     let added = 0;
     for(const cand of bucket){
@@ -214,6 +270,7 @@ async function main(){
   const out = [
     ...extractNouns(commonData, seenReadings),
     ...extractProverbsAndYoji(fullData, seenReadings),
+    ...extractTechnicalTerms(fullData, seenReadings),
     ...extractProperNouns(neData, seenReadings),
   ];
 
