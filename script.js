@@ -1,4 +1,4 @@
-import { toHiragana, analyzeEnding, startKana } from './kana.js';
+import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kana.js';
 
 (function(){
   const chainEl = document.getElementById('chain');
@@ -28,9 +28,16 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
     showToast._t = setTimeout(()=> toastEl.classList.remove('show'), 2800);
   }
   function updateMedallion(){
+    medallion.classList.remove('multi');
     if(gameOver){ medallion.textContent = '終'; medallionLabel.innerHTML = '対局<br>終了'; return; }
     if(!requiredKana){ medallion.textContent = '―'; medallionLabel.innerHTML = '最初の<br>ことばへ'; return; }
-    medallion.textContent = requiredKana;
+    const opts = acceptableStartKana(requiredKana);
+    if(opts.length > 1){
+      medallion.textContent = opts.join('/');
+      medallion.classList.add('multi');
+    }else{
+      medallion.textContent = requiredKana;
+    }
     medallionLabel.innerHTML = 'この音<br>から';
   }
   function updateScore(){ userScoreEl.textContent = score.user; aiScoreEl.textContent = score.ai; }
@@ -148,12 +155,23 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       wordsByKana.get(k).push(e);
     }
   }
+  // kana から始まる語に加え、濁点/半濁点を外した清音や歴史的仮名遣いの現代読みで
+  // 始まる語も候補に含める(acceptableStartKana、このアプリの緩和ルール)。
   function candidatesFor(kana, used){
-    return (wordsByKana.get(kana) || []).filter(e => !used.has(e.r));
+    const out = [];
+    for(const k of acceptableStartKana(kana)){
+      for(const e of (wordsByKana.get(k) || [])){
+        if(!used.has(e.r)) out.push(e);
+      }
+    }
+    return out;
   }
   // 使用済みを考慮しない、おおよその「かな→語数」。深い先読みの枝刈り(有望な候補の絞り込み)にのみ使う概算値。
   function kanaSizeApprox(kana){
-    return kana ? (wordsByKana.get(kana) || []).length : 0;
+    if(!kana) return 0;
+    let sum = 0;
+    for(const k of acceptableStartKana(kana)) sum += (wordsByKana.get(k) || []).length;
+    return sum;
   }
 
   const LOOKAHEAD_BRANCH_CAP = 12; // 2手目以降で深掘りする候補数の上限(枝刈り)
@@ -251,8 +269,9 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       renderCard({word: val, invalid:true, reason:'読みが特定できません。ひらがな/カタカナで入力してください', by:'user'});
       setBusy(false); return;
     }
-    if(requiredKana && startKana(resolved.reading) !== requiredKana){
-      renderCard({word: resolved.word, invalid:true, reason:'「'+requiredKana+'」から始まっていません', by:'user'});
+    if(requiredKana && !acceptableStartKana(requiredKana).includes(startKana(resolved.reading))){
+      const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
+      renderCard({word: resolved.word, invalid:true, reason: opts+'から始まっていません', by:'user'});
       setBusy(false); return;
     }
     if(usedReadings.has(resolved.reading)){
@@ -280,7 +299,8 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
 
     const move = pickAiMove(requiredKana, strengthSelect.value);
     if(!move){
-      renderGameOver('user', '辞書番の持ち駒(「'+requiredKana+'」から始まる言葉)が尽きました。');
+      const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
+      renderGameOver('user', '辞書番の持ち駒('+opts+'から始まる言葉)が尽きました。');
       gameOver = true; updateMedallion(); setBusy(true); return;
     }
     usedReadings.add(move.e.r);

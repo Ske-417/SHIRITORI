@@ -38,3 +38,30 @@ export function startKana(readingRaw){
   const reading = toHiragana(readingRaw||'').trim();
   return reading ? reading[0] : null;
 }
+
+// 濁点・半濁点付きの音から、それを外した清音を返す(該当なしは undefined)。
+export const DAKUTEN_BASE = {
+  'が':'か','ぎ':'き','ぐ':'く','げ':'け','ご':'こ',
+  'ざ':'さ','じ':'し','ず':'す','ぜ':'せ','ぞ':'そ',
+  'だ':'た','ぢ':'ち','づ':'つ','で':'て','ど':'と',
+  'ば':'は','び':'ひ','ぶ':'ふ','べ':'へ','ぼ':'ほ',
+  'ぱ':'は','ぴ':'ひ','ぷ':'ふ','ぺ':'へ','ぽ':'ほ',
+  'ゔ':'う',
+};
+
+// 歴史的仮名遣い→現代仮名遣い(該当なしは undefined)。
+export const HISTORICAL_KANA_MODERN = { 'を':'お', 'ゐ':'い', 'ゑ':'え' };
+
+// 直前の語の語尾の音(kana)から、次の語が始まってよい音の一覧を返す。
+// 通常は [kana] の1つだけだが、このアプリの緩和ルールとして:
+//  - 濁点・半濁点付きの音で終わった場合、清音から始める応答も許容する(例: 「ば」→「ば」「は」)
+//  - 歴史的仮名遣い(を/ゐ/ゑ)で終わった場合、現代仮名遣いから始める応答も許容する(例: 「を」→「を」「お」)
+// を認める。どちらも一方向のみ(清音や現代仮名遣いで終わった場合に濁音/historicalを
+// 追加で許すことはしない)。
+export function acceptableStartKana(kana){
+  if(!kana) return [];
+  const set = new Set([kana]);
+  if(DAKUTEN_BASE[kana]) set.add(DAKUTEN_BASE[kana]);
+  if(HISTORICAL_KANA_MODERN[kana]) set.add(HISTORICAL_KANA_MODERN[kana]);
+  return [...set];
+}

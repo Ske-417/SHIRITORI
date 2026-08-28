@@ -100,6 +100,7 @@ header{
   background:var(--paper-card);
   flex-shrink:0;
 }
+.medallion.multi{font-size:14px; letter-spacing:-.02em;} /* 濁点/歴史的仮名遣いの緩和で2音表示になる場合 */
 .medallion-label{font-size:11px; color:var(--ink-soft); line-height:1.5;}
 .score{
   margin-left:auto;

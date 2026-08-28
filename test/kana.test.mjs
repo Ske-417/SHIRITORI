@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toHiragana, analyzeEnding, startKana } from '../kana.js';
+import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from '../kana.js';
 
 test('toHiragana: カタカナをひらがなに変換する', () => {
   assert.equal(toHiragana('ラーメン'), 'らーめん');
@@ -57,4 +57,23 @@ test('startKana: 先頭の1文字を返す(カタカナはひらがな化)', () 
   assert.equal(startKana('いぬ'), 'い');
   assert.equal(startKana('ラーメン'), 'ら');
   assert.equal(startKana(''), null);
+});
+
+test('acceptableStartKana: 濁点・半濁点付きの音は清音からの開始も許容する', () => {
+  assert.deepEqual(acceptableStartKana('ば'), ['ば', 'は']);
+  assert.deepEqual(acceptableStartKana('ぱ'), ['ぱ', 'は']); // 半濁点も同じ清音(は行)に戻る
+  assert.deepEqual(acceptableStartKana('が'), ['が', 'か']);
+  assert.deepEqual(acceptableStartKana('ゔ'), ['ゔ', 'う']);
+});
+
+test('acceptableStartKana: 歴史的仮名遣い(を/ゐ/ゑ)は現代仮名遣いからの開始も許容する', () => {
+  assert.deepEqual(acceptableStartKana('を'), ['を', 'お']);
+  assert.deepEqual(acceptableStartKana('ゐ'), ['ゐ', 'い']);
+  assert.deepEqual(acceptableStartKana('ゑ'), ['ゑ', 'え']);
+});
+
+test('acceptableStartKana: 清音や通常の音は緩和の対象にならず単一のまま', () => {
+  assert.deepEqual(acceptableStartKana('か'), ['か']);
+  assert.deepEqual(acceptableStartKana('お'), ['お']); // お段自体は緩和対象ではない(を→おの一方向のみ)
+  assert.deepEqual(acceptableStartKana(null), []);
 });
