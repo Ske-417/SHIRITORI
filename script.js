@@ -331,7 +331,7 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       showToast('辞書データの読み込みに失敗しました(ローカルサーバー経由で開いてください)');
     }
     buildWordIndex();
-    wordCountEl.textContent = WORDS.length;
+    wordCountEl.textContent = WORDS.length.toLocaleString('ja-JP');
     updateScore(); updateMedallion();
     setBusy(false);
   }
