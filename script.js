@@ -341,7 +341,13 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
   }
 
   submitBtn.addEventListener('click', handleSubmit);
-  inputEl.addEventListener('keydown', e => { if(e.key === 'Enter') handleSubmit(); });
+  // IME変換確定のEnterでも submit してしまわないよう、変換中(isComposing/keyCode 229)は無視する。
+  // これにより「変換確定のEnter」と「送信のEnter」が別の操作として扱われる。
+  inputEl.addEventListener('keydown', e => {
+    if(e.key !== 'Enter') return;
+    if(e.isComposing || e.keyCode === 229) return;
+    handleSubmit();
+  });
   restartBtn.addEventListener('click', restart);
 
   init();
