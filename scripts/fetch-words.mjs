@@ -48,16 +48,15 @@ const NOUN_POS = new Set(['n', 'n-adv', 'n-t', 'n-pref', 'n-suf', 'n-pr']);
 // 抽出する語数の上限。種別ごとに設けているのは、無名すぎる語(人名の末端など)で
 // 辞書全体が埋まってゲームとして破綻するのを避けるため。値自体はここで調整できる。
 const CAPS = {
-  noun: 10000,
-  place: 15000,
-  organization: 8000,
-  station: 3000,
-  person: 15000,
-  surname: 8000,
-  given: 5000,
-  fem: 4000,
-  masc: 3000,
-  unclass: 1000,
+  noun: 20000,
+  place: 40000,
+  station: 6000,
+  person: 30000,
+  surname: 25000,
+  given: 15000,
+  fem: 15000,
+  masc: 10000,
+  unclass: 3000,
 };
 const CAP_DEFAULT = Infinity; // company / product / work / group など元々件数が少ないものは無制限
 
