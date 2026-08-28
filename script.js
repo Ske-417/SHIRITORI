@@ -12,6 +12,8 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   const restartBtn = document.getElementById('restartBtn');
   const toastEl = document.getElementById('toast');
   const wordCountEl = document.getElementById('wordCount');
+  const timerFill = document.getElementById('timerFill');
+  const timerLabel = document.getElementById('timerLabel');
 
   let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない
   let usedReadings = new Set(); // これまでに場に出た「読み」(ユーザー・AI問わず)
@@ -19,6 +21,38 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   let score = {user:0, ai:0};
   let gameOver = false;
   let busy = true;
+
+  // ---------------- 持ち時間(強さに関わらず一律) ----------------
+  const TURN_TIME_LIMIT = 60; // 秒
+  let turnInterval = null;
+  let turnRemaining = TURN_TIME_LIMIT;
+  function clearTurnTimer(){
+    if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
+    timerFill.style.width = '100%';
+    timerFill.classList.remove('urgent');
+    timerLabel.textContent = TURN_TIME_LIMIT + '秒';
+    timerLabel.classList.remove('urgent');
+  }
+  function startTurnTimer(){
+    clearTurnTimer();
+    turnRemaining = TURN_TIME_LIMIT;
+    turnInterval = setInterval(() => {
+      turnRemaining--;
+      if(turnRemaining <= 0){
+        clearInterval(turnInterval); turnInterval = null;
+        timerFill.style.width = '0%';
+        timerLabel.textContent = '0秒';
+        handleTimeout();
+        return;
+      }
+      const pct = Math.max(0, (turnRemaining / TURN_TIME_LIMIT) * 100);
+      timerFill.style.width = pct + '%';
+      timerLabel.textContent = turnRemaining + '秒';
+      const urgent = turnRemaining <= 10;
+      timerFill.classList.toggle('urgent', urgent);
+      timerLabel.classList.toggle('urgent', urgent);
+    }, 1000);
+  }
 
   // ---------------- UI ヘルパー ----------------
   function showToast(msg){
@@ -174,6 +208,14 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     return sum;
   }
 
+  // 制限時間切れの際、「ちなみにこんな言葉があった」という一例を示すための候補探し。
+  // requiredKana が無い(最初の一手)場合は未使用の語からランダムに1つ選ぶ。
+  function pickHintWord(kana){
+    const pool = kana ? candidatesFor(kana, usedReadings) : WORDS.filter(e => !usedReadings.has(e.r));
+    if(pool.length === 0) return null;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
   const LOOKAHEAD_BRANCH_CAP = 12; // 2手目以降で深掘りする候補数の上限(枝刈り)
   const HARD_OUTER_CAP = 50;       // 一手目候補のうち、深く読むのは有望な上位何件までか
   const HARD_LOOKAHEAD_DEPTH = 2;  // 0=1手先読み(従来通り) 1=2手先読み 2=3手先読み
@@ -252,7 +294,29 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     return best[Math.floor(Math.random()*best.length)];
   }
 
-  function setBusy(v){ busy = v; inputEl.disabled = v || gameOver; submitBtn.disabled = v || gameOver; }
+  function setBusy(v){
+    busy = v;
+    inputEl.disabled = v || gameOver;
+    submitBtn.disabled = v || gameOver;
+    // あなたの手番(=busyでもgameOverでもない)のときだけ持ち時間を計測する。
+    if(v || gameOver) clearTurnTimer();
+    else startTurnTimer();
+  }
+
+  // 制限時間(強さに関わらず一律 TURN_TIME_LIMIT 秒)以内に入力できなかった場合の即負け。
+  function handleTimeout(){
+    if(busy || gameOver) return;
+    gameOver = true;
+    const hint = pickHintWord(requiredKana);
+    let note = '制限時間('+TURN_TIME_LIMIT+'秒)以内に言葉を入力できませんでした。';
+    if(hint){
+      const shown = hint.w === hint.r ? hint.w : (hint.w+'('+hint.r+')');
+      note += '<br><span class="hint">ちなみに「'+shown+'」という言葉がありました。</span>';
+    }
+    updateMedallion();
+    renderGameOver('ai', note);
+    setBusy(true);
+  }
 
   async function handleSubmit(){
     if(busy || gameOver) return;

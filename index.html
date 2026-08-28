@@ -47,8 +47,14 @@
     </main>
 
     <div class="input-bar">
-      <input id="wordInput" type="text" placeholder="ことばを入力…" autocomplete="off">
-      <button id="submitBtn">送る</button>
+      <div class="timer-row">
+        <div class="timer-track"><div class="timer-fill" id="timerFill"></div></div>
+        <div class="timer-label" id="timerLabel">60秒</div>
+      </div>
+      <div class="input-row">
+        <input id="wordInput" type="text" placeholder="ことばを入力…" autocomplete="off">
+        <button id="submitBtn">送る</button>
+      </div>
     </div>
   </div>
 </div>
