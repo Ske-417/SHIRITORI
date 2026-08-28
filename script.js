@@ -197,10 +197,13 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
     const pool = candidatesFor(kana, usedReadings);
     if(pool.length === 0) return null;
 
+    // 語彙が数万〜十万語規模になったため、ここでは概算値(kanaSizeApprox、使用済みを考慮しない
+    // O(1)の目安)で高速に見積もる。正確な値が必要な「めちゃ強い」の最終決定は、後段で
+    // 有望な上位候補だけに絞ってから使用済みを考慮した正確な探索(minimaxOptions)を行う。
     const scored = pool.map(e => {
       const end = analyzeEnding(e.r);
-      const opponentOptions = end.isN ? -1 : candidatesFor(end.kana, usedReadings).length;
-      return {e, end, isN: end.isN, opponentOptions};
+      const approxOptions = end.isN ? -1 : kanaSizeApprox(end.kana);
+      return {e, end, isN: end.isN, approxOptions};
     });
 
     const safe = scored.filter(s => !s.isN);
@@ -210,14 +213,15 @@ import { toHiragana, analyzeEnding, startKana } from './kana.js';
       return usable[Math.floor(Math.random()*usable.length)];
     }
     if(strength === 'normal'){
-      usable.sort((a,b) => a.opponentOptions - b.opponentOptions);
+      usable.sort((a,b) => a.approxOptions - b.approxOptions);
       const mid = usable.slice(0, Math.max(1, Math.ceil(usable.length*0.6)));
       return mid[Math.floor(Math.random()*mid.length)];
     }
 
-    // hard: まず1手先読み(opponentOptions)で有望な候補に絞り込み、その上位だけを
-    // 2〜3手先まで深掘りして最終決定する(合法手すべてを深く読むと重すぎるため)。
-    usable.sort((a,b) => a.opponentOptions - b.opponentOptions);
+    // hard: まず概算値(kanaSizeApprox)で有望な候補に絞り込み、その上位だけを
+    // 使用済みを考慮した正確な探索で2〜3手先まで深掘りして最終決定する
+    // (合法手すべてを正確に数えてから深く読むと、語彙が大きいときに重すぎるため)。
+    usable.sort((a,b) => a.approxOptions - b.approxOptions);
     const deepPool = usable.slice(0, HARD_OUTER_CAP);
     for(const s of deepPool){
       if(s.isN){ s.deepScore = 0; continue; }
