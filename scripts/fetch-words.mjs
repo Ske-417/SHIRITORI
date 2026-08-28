@@ -18,8 +18,12 @@
  *   1. 一般名詞      … jmdict-eng-common から品詞タグが名詞系のものだけ (よく使われる語のみ)
  *   2. ことわざ・故事成語 … jmdict-eng (フル版) から misc タグ "proverb" / "yoji" が付いた語
  *   3. 専門用語      … jmdict-eng (フル版) から field タグが医学・化学系の語
- *   4. 固有名詞      … jmnedict-all (人名・地名・組織名など、海外の地名・著名人も含む) から
- *                    種別ごとに上限を設けて抽出
+ *   4. 神話          … jmdict-eng (フル版) から field タグが神話系(ギリシャ/ローマ/中国/日本)の語
+ *   5. 固有名詞      … jmnedict-all (地名・組織名など「人でないもの」は種別ごとに上限を設けて全採用。
+ *                    人物系(person/surname/given/fem/masc/unclass)は、JMnedict上で
+ *                    生没年などの伝記情報が確認できるもの=著名人と判定できるものだけを採用する。
+ *                    JMnedictの fem/given/masc/surname はただの名前読み辞書であり無名な人物も
+ *                    大量に含まれるため、伝記情報という裏付けが無い語は採用しない)
  *
  * 注意:
  * - JMdict/JMnedict は Electronic Dictionary Research and Development Group (EDRDG) が
@@ -49,16 +53,10 @@ const NOUN_POS = new Set(['n', 'n-adv', 'n-t', 'n-pref', 'n-suf', 'n-pr']);
 // 辞書全体が埋まってゲームとして破綻するのを避けるため。値自体はここで調整できる。
 const CAPS = {
   noun: 20000,
-  place: 40000,
-  station: 6000,
-  person: 30000,
-  surname: 25000,
-  given: 15000,
-  fem: 15000,
-  masc: 10000,
-  unclass: 3000,
+  place: 80000,
+  person: 40000, // 著名人(伝記情報あり)のみ採用するため、上限自体は実質効かない想定
 };
-const CAP_DEFAULT = Infinity; // company / product / work / group など元々件数が少ないものは無制限
+const CAP_DEFAULT = Infinity; // company / product / work / group / station など元々件数が少ないものは無制限
 
 // JMdict の field タグのうち、医学・化学(および隣接する生物医学系)とみなすもの。
 // これらは専門用語なので「よく使われる(common)」条件を外して抽出する。
@@ -67,13 +65,21 @@ const MEDICAL_CHEMISTRY_FIELDS = new Set([
   'genet', 'dent', 'surg', 'embryo', 'vet',
 ]);
 
+// ギリシャ/ローマ/中国/日本の神話に関する field タグ。ゼウス・ヘラクレス等の
+// 神話上の人物・神・生物がここから採れる(JMnedictのmyth種別は件数が少ないため補完)。
+const MYTHOLOGY_FIELDS = new Set(['grmyth', 'rommyth', 'chmyth', 'jpmyth']);
+
+// JMnedictの種別のうち「個人の名前」を表すもの。この5種は生没年などの伝記情報が
+// JMnedict上で確認できる語(=著名人と判定できる語)だけを採用する。
+const PERSON_TYPES_REQUIRE_BIO = new Set(['person', 'surname', 'given', 'fem', 'masc', 'unclass']);
+
 const NAME_TYPE_LABEL = {
   place: '地名', organization: '組織名', company: '企業名', product: '製品名',
   work: '作品名', station: '駅名', group: 'グループ名', person: '人名',
   surname: '姓', given: '名', fem: '女性の名', masc: '男性の名', unclass: '固有名詞',
-  serv: '固有名詞', obj: '固有名詞', char: '固有名詞', dei: '固有名詞',
-  fict: '固有名詞', creat: '固有名詞', myth: '固有名詞', ship: '固有名詞',
-  ev: '固有名詞', leg: '固有名詞', doc: '固有名詞',
+  serv: '固有名詞', obj: '固有名詞', char: 'キャラクター', dei: '神話の神',
+  fict: '架空の人物', creat: '架空の生物', myth: '神話', ship: '固有名詞',
+  ev: '固有名詞', leg: '伝説上の人物', doc: '固有名詞',
 };
 // JMnedict の種別のうち、優先して採用する順序(重複読みは先勝ち)
 const NAME_TYPE_PRIORITY = [
@@ -189,20 +195,39 @@ function extractTechnicalTerms(data, seenReadings){
   return out;
 }
 
+function extractMythology(data, seenReadings){
+  const out = [];
+  for(const word of data.words){
+    const kana = word.kana && word.kana[0];
+    if(!kana) continue;
+    const isTarget = word.sense.some(s => (s.field || []).some(f => MYTHOLOGY_FIELDS.has(f)));
+    if(!isTarget) continue;
+
+    const reading = toHiragana(kana.text);
+    const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
+    if(!gloss) continue;
+    const kanji = word.kanji && word.kanji[0];
+
+    addEntry(out, seenReadings, Infinity, {
+      w: (kanji && kanji.text) || kana.text,
+      r: reading,
+      m: `(en) ${gloss.text}`,
+    });
+  }
+  console.log(`神話: ${out.length}語`);
+  return out;
+}
+
 // 生没年などの伝記情報(例: "(1879-1955; ...)")が翻訳文に含まれるかどうかで、
 // 「著名人らしさ」を大まかに判定する。JMnedictにはそれ以外の著名度指標が無いため。
 function looksNotable(translations){
   return translations.some(t => t.translation.some(g => /\(\d{3,4}/.test(g.text)));
 }
 
-// 固有名詞の並び優先度。数値が小さいほど CAPS の上限に収まりやすい(=優先採用される)。
-//   0: 伝記情報があり著名人らしいと判定できるもの
-//   1: 漢字表記が無い(=海外由来の地名/名前である可能性が高い)もの
-//   2: それ以外
+// 固有名詞の並び優先度(place の上限に収める際、海外由来と推定できる語を優先する)。
 function rankTier(cand){
-  if(cand.bio) return 0;
-  if(cand.type === 'place' && !cand.hasKanji) return 1;
-  return 2;
+  if(cand.type === 'place' && !cand.hasKanji) return 0;
+  return 1;
 }
 
 function primaryNameType(word){
@@ -213,12 +238,19 @@ function primaryNameType(word){
 }
 
 function extractProperNouns(data, seenReadings){
-  const buckets = new Map(); // type -> array of {w,r,hasKanji,bio,type}
+  const buckets = new Map(); // type -> array of {w,r,hasKanji,type}
   for(const word of data.words){
     const kana = word.kana && word.kana[0];
     if(!kana) continue;
     const type = primaryNameType(word);
     if(!type) continue;
+
+    // person/surname/given/fem/masc/unclass はJMnedict上ただの名前読み辞書であり、
+    // 無名な人物も大量に含まれる。生没年などの伝記情報が確認できる語(=著名人と
+    // 判定できる語)だけを採用する。それ以外の種別(地名・組織名・神話上の人物など、
+    // 個人の実名ではないもの)はこの条件を課さない。
+    if(PERSON_TYPES_REQUIRE_BIO.has(type) && !looksNotable(word.translation)) continue;
+
     const reading = toHiragana(kana.text);
     if(!KANA_ONLY.test(reading) || reading.length < 2) continue;
     const kanji = word.kanji && word.kanji[0];
@@ -226,7 +258,6 @@ function extractProperNouns(data, seenReadings){
       w: (kanji && kanji.text) || kana.text,
       r: reading,
       hasKanji: !!kanji,
-      bio: looksNotable(word.translation),
       type,
     };
     if(!buckets.has(type)) buckets.set(type, []);
@@ -237,7 +268,7 @@ function extractProperNouns(data, seenReadings){
   for(const type of NAME_TYPE_PRIORITY){
     const bucket = buckets.get(type);
     if(!bucket) continue;
-    // rankTier: 著名人(伝記情報あり)や海外由来(漢字表記なし)を優先して上限内に収める。
+    // rankTier: place について海外由来(漢字表記なし)を優先して上限内に収める。
     // Array#sort は安定ソートなので、同ティア内は元の並び順を保つ。
     bucket.sort((a, b) => rankTier(a) - rankTier(b));
     const cap = CAPS[type] ?? CAP_DEFAULT;
@@ -270,6 +301,7 @@ async function main(){
     ...extractNouns(commonData, seenReadings),
     ...extractProverbsAndYoji(fullData, seenReadings),
     ...extractTechnicalTerms(fullData, seenReadings),
+    ...extractMythology(fullData, seenReadings),
     ...extractProperNouns(neData, seenReadings),
   ];
 
