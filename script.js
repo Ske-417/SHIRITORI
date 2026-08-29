@@ -365,7 +365,7 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     updateMedallion();
 
     renderThinking('ai');
-    await new Promise(r => setTimeout(r, 450));
+    await new Promise(r => setTimeout(r, 1000));
     removeThinking();
 
     const move = pickAiMove(requiredKana, strengthSelect.value);
