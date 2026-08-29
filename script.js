@@ -307,7 +307,9 @@ import { parseTSV } from './tsv.js';
     inputEl.disabled = v || gameOver;
     submitBtn.disabled = v || gameOver;
     // あなたの手番(=busyでもgameOverでもない)のときだけ持ち時間を計測する。
-    if(v || gameOver) clearTurnTimer();
+    // ただし対局開始直後の最初の一手(requiredKanaがまだ無い、自由な一手)は
+    // 対局が実質始まっていない状態なので、時間切れの対象にはしない。
+    if(v || gameOver || !requiredKana) clearTurnTimer();
     else startTurnTimer();
   }
 
@@ -445,7 +447,7 @@ import { parseTSV } from './tsv.js';
   // OFFにした瞬間は計測をやめ、ONに戻した瞬間はあなたの手番であれば新たに計測を始める。
   timerToggle.addEventListener('change', () => {
     if(timerToggle.checked){
-      if(!busy && !gameOver) startTurnTimer();
+      if(!busy && !gameOver && requiredKana) startTurnTimer();
     }else{
       clearTurnTimer();
     }
