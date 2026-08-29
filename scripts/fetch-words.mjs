@@ -131,6 +131,10 @@ function toHiragana(str){
   return str.replace(/[ァ-ヶ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
+function toKatakana(str){
+  return str.replace(/[ぁ-ん]/g, ch => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+}
+
 async function getAsset(nameTest){
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
     headers: { 'User-Agent': 'shiritori-dojo-fetch-words' }
@@ -191,7 +195,7 @@ function extractNouns(data, seenReadings){
     addEntry(out, seenReadings, CAPS.noun, {
       w: (kanjiCommon && kanjiCommon.text) || kanaCommon.text,
       r: reading,
-      m: `(en) ${gloss.text}`,
+      m: '普通名詞',
       t: 1,
     });
   }
@@ -215,7 +219,7 @@ function extractProverbsAndYoji(data, seenReadings){
     addEntry(out, seenReadings, Infinity, {
       w: (kanji && kanji.text) || kana.text,
       r: reading,
-      m: `(en) ${gloss.text}`,
+      m: 'ことわざ・故事成語',
     });
   }
   console.log(`ことわざ・故事成語: ${out.length}語`);
@@ -247,7 +251,7 @@ function extractFieldTerms(data, seenReadings){
     addEntry(out, seenReadings, Infinity, {
       w: (kanji && kanji.text) || kana.text,
       r: reading,
-      m: `[${label}] (en) ${gloss.text}`,
+      m: label,
     });
   }
   console.log(`専門用語(分野横断): ${out.length}語`);
@@ -270,7 +274,7 @@ function extractMythology(data, seenReadings){
     addEntry(out, seenReadings, Infinity, {
       w: (kanji && kanji.text) || kana.text,
       r: reading,
-      m: `(en) ${gloss.text}`,
+      m: '神話',
     });
   }
   console.log(`神話: ${out.length}語`);
@@ -315,13 +319,13 @@ function extractProperNouns(data, seenReadings, famousPlaceNames){
     // 無名な人物も大量に含まれる。生没年などの伝記情報が確認できる語(=著名人と
     // 判定できる語)だけを採用する。それ以外の種別(地名・組織名・神話上の人物など、
     // 個人の実名ではないもの)はこの条件を課さない。
-    // 伝記情報がある場合は、種別ラベルの代わりにその伝記情報自体を意味欄に使う
-    // (しりとり中に「誰なのか」がそのまま分かるようにするため)。
-    let m = NAME_TYPE_LABEL[type];
+    // 意味欄(m)は種別ラベルのみ(例:「人名」)にする。JMnedictの伝記情報は英語しか
+    // 無いため、後段の enrichPersonDescriptions() でWikidataから日本語の説明文(d)を
+    // 探す。見つからなければ「誰なのか」は表示されない(=種別ラベルのみになる)。
+    const m = NAME_TYPE_LABEL[type];
     if(PERSON_TYPES_REQUIRE_BIO.has(type)){
       const bio = getBioText(word.translation);
       if(!bio) continue;
-      m = `(en) ${bio}`;
     }
 
     const reading = toHiragana(kana.text);
@@ -346,6 +350,7 @@ function extractProperNouns(data, seenReadings, famousPlaceNames){
   }
 
   const out = [];
+  const personEntries = []; // Wikidataからの説明文補完(enrichPersonDescriptions)の対象
   for(const type of NAME_TYPE_PRIORITY){
     const bucket = buckets.get(type);
     if(!bucket) continue;
@@ -359,12 +364,13 @@ function extractProperNouns(data, seenReadings, famousPlaceNames){
       if(addEntry(out, seenReadings, Infinity, { w: cand.w, r: cand.r, m: cand.m, t: cand.t, d: cand.d })){
         added++;
         if(cand.t) famousAdded++;
+        if(PERSON_TYPES_REQUIRE_BIO.has(type)) personEntries.push(out[out.length - 1]);
       }
     }
     if(type === 'place') console.log(`  地名のうちtier1(著名な都道府県・主要都市): ${famousAdded}件`);
   }
   console.log(`固有名詞: ${out.length}語`);
-  return out;
+  return { out, personEntries };
 }
 
 // Wikidata由来のカテゴリ。directOnly=true は P31 の直接インスタンスのみを対象にする
@@ -638,7 +644,16 @@ async function enrichWithWikidataDescriptions(entries, label){
   let filled = 0;
   for(let i = 0; i < targets.length; i += CHUNK){
     const chunk = targets.slice(i, i + CHUNK);
-    const values = chunk.map(e => `"${e.w.replace(/"/g, '\\"')}"@ja`).join(' ');
+    // 検索候補ラベル: 表記(w)に加え、読み(r)をカタカナに変換したものも試す。
+    // 例:「林檎」はJMdict上の表記(漢字)だが、Wikidataでは果物の項目が
+    // カタカナの「リンゴ」というラベルで登録されていることが多く、
+    // 表記だけの一致では拾えない語をここで拾えるようにする。
+    const labelSet = new Set();
+    for(const e of chunk){
+      labelSet.add(e.w);
+      labelSet.add(toKatakana(e.r));
+    }
+    const values = [...labelSet].map(l => `"${l.replace(/"/g, '\\"')}"@ja`).join(' ');
     const query = `SELECT ?label ?desc WHERE {
       VALUES ?label { ${values} }
       ?item rdfs:label ?label .
@@ -654,7 +669,7 @@ async function enrichWithWikidataDescriptions(entries, label){
         if(!descByLabel.has(l)) descByLabel.set(l, d); // 除外しきれず複数残った場合は先頭の1件
       }
       for(const e of chunk){
-        const d = descByLabel.get(e.w);
+        const d = descByLabel.get(e.w) || descByLabel.get(toKatakana(e.r));
         if(d){ e.d = d; filled++; }
       }
     }catch(err){
@@ -663,6 +678,47 @@ async function enrichWithWikidataDescriptions(entries, label){
     await new Promise(r => setTimeout(r, 800));
   }
   console.log(`  → ${label}: ${filled}語に説明文を追加できました`);
+}
+
+// JMnedictの著名人(person/surname/given/fem/masc/unclass、生没年などの伝記情報で
+// 判定済み)には英語の伝記文しか無いため、Wikidataで「日本語ラベルが表記(entry.w)と
+// 完全一致し、かつ人間(P31=Q5)である項目」を探し、日本語の説明文をdとして補う。
+// enrichWithWikidataDescriptions と違いブロックリストではなく人間限定のホワイト
+// リストで絞るため、同名の作品・地名等に誤ってヒットすることはほぼ無い。
+// 見つからなかった語は、説明文なし(m=種別ラベルのみ)のまま残る。
+async function enrichPersonDescriptions(entries){
+  const targets = entries.filter(e => !e.d);
+  if(targets.length === 0) return;
+  console.log(`Wikidataとの表記一致で人物の説明文を補完中: 対象${targets.length}語(数分かかることがあります)`);
+  const CHUNK = 200;
+  let filled = 0;
+  for(let i = 0; i < targets.length; i += CHUNK){
+    const chunk = targets.slice(i, i + CHUNK);
+    const values = chunk.map(e => `"${e.w.replace(/"/g, '\\"')}"@ja`).join(' ');
+    const query = `SELECT ?label ?desc WHERE {
+      VALUES ?label { ${values} }
+      ?item rdfs:label ?label .
+      ?item wdt:P31 wd:Q5 .
+      ?item schema:description ?desc . FILTER(LANG(?desc)='ja')
+    }`;
+    try{
+      const rows = await sparql(query);
+      const descByLabel = new Map();
+      for(const row of rows){
+        const l = row.label.value, d = row.desc.value;
+        if(!isUsableWikidataDesc(d)) continue;
+        if(!descByLabel.has(l)) descByLabel.set(l, d);
+      }
+      for(const e of chunk){
+        const d = descByLabel.get(e.w);
+        if(d){ e.d = d; filled++; }
+      }
+    }catch(err){
+      console.warn(`  チャンク(${i}-${i + chunk.length})が失敗したためスキップ: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 800));
+  }
+  console.log(`  → 人物: ${filled}語に説明文を追加できました`);
 }
 
 async function main(){
@@ -694,6 +750,11 @@ async function main(){
   await enrichWithWikidataDescriptions(proverbs, 'ことわざ・故事成語');
   await enrichWithWikidataDescriptions(fieldTerms, '専門用語');
 
+  const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
+  // JMnedict由来の著名人は英語の伝記文しか無いため、Wikidataとの表記一致(かつ人間限定)で
+  // 日本語の説明文(d)を補う。見つかった分だけ「誰なのか」が表示されるようになる。
+  await enrichPersonDescriptions(properNouns.personEntries);
+
   const out = [
     ...nouns,
     ...proverbs,
@@ -701,7 +762,7 @@ async function main(){
     ...(await extractWikidataBeings(seenReadings)),
     ...(await extractWikidataHumans(seenReadings)),
     ...extractMythology(fullData, seenReadings),
-    ...extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe()),
+    ...properNouns.out,
   ];
 
   console.log(`抽出できた語数の合計: ${out.length}`);
