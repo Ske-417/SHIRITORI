@@ -343,32 +343,75 @@ function extractProperNouns(data, seenReadings){
 // Wikidata由来のカテゴリ。directOnly=true は P31 の直接インスタンスのみを対象にする
 // (Q95074「架空のキャラクター」は下位クラスが非常に多く、P279*での再帰検索は
 //  クエリがタイムアウトしやすいため直接インスタンスのみに絞っている)。
+// ビデオゲーム/音楽グループは P31 直接インスタンスだけでも1万〜2万件と非常に多く、
+// そのまま1クエリで取得しようとすると応答が巨大になりすぎて途中で壊れた(切れた)
+// JSONが返ってくることがあった。minSitelinks(掲載されている言語版ウィキペディアの数)で
+// 足切りし、「ある程度知られている」ものに絞ることで応答サイズを抑えている。
 const WIKIDATA_CATEGORIES = [
   { qid: 'Q22989102', label: '神話の神', directOnly: false },
   { qid: 'Q24334685', label: '神話・伝説の生物', directOnly: false },
   { qid: 'Q95074', label: '架空のキャラクター', directOnly: true },
+  { qid: 'Q7889', label: 'ビデオゲーム', directOnly: true, minSitelinks: 5 },
+  { qid: 'Q215380', label: '音楽グループ', directOnly: true, minSitelinks: 5 },
 ];
 const WIKIDATA_ENDPOINT = 'https://query.wikidata.org/sparql';
 const WIKIDATA_USER_AGENT = 'shiritori-dojo-fetch-words/1.0 (https://github.com/; educational hobby project)';
 
-// query.wikidata.org は共有の公開エンドポイントで、負荷状況により 502 等で
-// 一時的に失敗することがあるため、軽くリトライする。
-async function sparql(query, retries = 2){
+// query.wikidata.org は共有の公開エンドポイントで、負荷状況により 502 等の
+// HTTPエラーだけでなく、応答が大きすぎて壊れた(途中で切れた)JSONが返って
+// くることもあるため、JSON解析の失敗も含めてリトライする。
+async function sparql(query, retries = 4){
   const url = `${WIKIDATA_ENDPOINT}?query=${encodeURIComponent(query)}`;
   for(let attempt = 0; ; attempt++){
-    const res = await fetch(url, {
-      headers: { 'Accept': 'application/sparql-results+json', 'User-Agent': WIKIDATA_USER_AGENT }
-    });
-    if(res.ok) return (await res.json()).results.bindings;
-    if(attempt >= retries) throw new Error(`Wikidata SPARQL error: ${res.status}`);
-    await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+    try{
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/sparql-results+json', 'User-Agent': WIKIDATA_USER_AGENT }
+      });
+      if(!res.ok) throw new Error(`Wikidata SPARQL error: ${res.status}`);
+      const data = await res.json();
+      return data.results.bindings;
+    }catch(err){
+      if(attempt >= retries) throw err;
+      await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+    }
   }
 }
 
-async function fetchWikidataLabels(qid, directOnly){
+// 結果件数が数千件を超えるクエリは、1回のレスポンスが巨大になりすぎて途中で
+// 切れた(壊れた)JSONが返ってくることがある(sparql()のリトライだけでは直らない、
+// 毎回同じ理由で壊れるため)。LIMIT/OFFSET でページ単位に分けて取得することで
+// 1回あたりの応答サイズを抑える。ORDER BY を付けると(特にP279*のような再帰パスや
+// 大きな結果集合で)ページごとに結果全体をソートし直す必要が生じてクエリ自体が
+// タイムアウトしやすくなったため、あえて付けていない。順序が安定しない分、
+// ページ境界で稀に重複/欠落が起こり得るが、重複はaddEntryの読み重複チェックで
+// 吸収され、欠落も少数語を取りこぼす程度で致命的ではないため許容している。
+// 1ページの取得が(sparql()内のリトライを尽くしても)失敗した場合は、そこまでに
+// 取得できた分だけを返して打ち切る(1ページの不調でカテゴリ全体を諦めないため)。
+async function sparqlPaginated(buildQuery, pageSize = 800){
+  const out = [];
+  for(let offset = 0; ; offset += pageSize){
+    let rows;
+    try{
+      rows = await sparql(buildQuery(pageSize, offset));
+    }catch(err){
+      console.warn(`  ページ取得(offset=${offset})が失敗したため、ここまでの${out.length}件で打ち切ります: ${err.message}`);
+      break;
+    }
+    out.push(...rows);
+    if(rows.length < pageSize) break;
+    await new Promise(r => setTimeout(r, 1500)); // Wikidataへの負荷を抑えるための小休止
+  }
+  return out;
+}
+
+async function fetchWikidataLabels(qid, directOnly, minSitelinks){
   const path = directOnly ? 'wdt:P31' : 'wdt:P31/wdt:P279*';
-  const query = `SELECT ?item ?itemLabel WHERE { ?item ${path} wd:${qid} . ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja') }`;
-  return sparql(query);
+  const sitelinksClause = minSitelinks
+    ? `?item wikibase:sitelinks ?sitelinks . FILTER(?sitelinks >= ${minSitelinks})`
+    : '';
+  return sparqlPaginated((limit, offset) =>
+    `SELECT ?item ?itemLabel WHERE { ?item ${path} wd:${qid} . ${sitelinksClause} ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja') } LIMIT ${limit} OFFSET ${offset}`
+  );
 }
 
 // Wikidataの「人間(Q5)」は全体で数百万件あり、素朴な P31 検索は必ずタイムアウトする。
@@ -378,13 +421,12 @@ async function fetchWikidataLabels(qid, directOnly){
 // 世界的に有名な人物に絞られ、クエリも軽くなる(下げすぎるとタイムアウトしやすい)。
 const WIKIDATA_HUMAN_MIN_SITELINKS = 12;
 async function fetchWikidataNotableHumans(){
-  const query = `SELECT ?item ?itemLabel WHERE {
+  return sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
     ?article schema:about ?item ; schema:isPartOf <https://ja.wikipedia.org/> .
     ?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sitelinks .
     FILTER(?sitelinks >= ${WIKIDATA_HUMAN_MIN_SITELINKS})
     ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
-  }`;
-  return sparql(query);
+  } LIMIT ${limit} OFFSET ${offset}`);
 }
 
 // 説明文はラベル取得とは別クエリでバッチ取得する(1クエリにまとめるとタイムアウトしやすいため)。
@@ -415,7 +457,7 @@ async function extractWikidataBeings(seenReadings){
   const out = [];
   for(const cat of WIKIDATA_CATEGORIES){
     try{
-      const rows = await fetchWikidataLabels(cat.qid, cat.directOnly);
+      const rows = await fetchWikidataLabels(cat.qid, cat.directOnly, cat.minSitelinks);
       const seenLocal = new Set();
       const candidates = [];
       for(const row of rows){
