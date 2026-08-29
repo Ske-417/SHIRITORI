@@ -4,15 +4,17 @@
  *
  * JMdict-simplified / JMnedict-simplified (https://github.com/scriptin/jmdict-simplified) の
  * 最新リリースから公開データをダウンロードし、しりとりの手として使える語を抽出して
- * words-auto.json を作り直します。
+ * words-auto.tsv を作り直します。
  *
  * 使い方:
  *   npm install
  *   npm run fetch-words
  *
- * 生成物: ../words-auto.json (プロジェクトルート、既存ファイルを上書きします)
- * ※ 手作業で日本語の意味を付けたコア辞書は words-core.json に分離してあり、
- *   このスクリプトが触るのは words-auto.json だけです。
+ * 生成物: ../words-auto.tsv (プロジェクトルート、既存ファイルを上書きします。TSV形式で、
+ *   1行目はヘッダー w/r/m/t/d。表計算ソフトで開いて確認・編集しやすくするため
+ *   JSONではなくTSVを採用している。詳細は ../tsv.js 参照)
+ * ※ 手作業で日本語の意味を付けたコア辞書は words-core.tsv に分離してあり、
+ *   このスクリプトが触るのは words-auto.tsv だけです。
  *
  * 抽出対象:
  *   1. 一般名詞      … jmdict-eng-common から品詞タグが名詞系のものだけ (よく使われる語のみ)
@@ -39,13 +41,14 @@
  * - Wikidata由来のデータは CC0 です(https://www.wikidata.org/wiki/Wikidata:Licensing)。
  *   query.wikidata.org への負荷を抑えるため、説明文の取得はラベル取得とは別のバッチ
  *   クエリに分けている(1回の巨大なクエリにまとめるとタイムアウトしやすいため)。
- * - gloss(意味)は英語のみです。日本語の意味が欲しい語は words-core.json 側に追加してください。
+ * - gloss(意味)は英語のみです。日本語の意味が欲しい語は words-core.tsv 側に追加してください。
  * - Node.js 18 以降 (fetch 標準搭載) が必要です。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import AdmZip from 'adm-zip';
+import { stringifyTSV } from '../tsv.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -384,12 +387,22 @@ const WIKIDATA_USER_AGENT = 'shiritori-dojo-fetch-words/1.0 (https://github.com/
 // query.wikidata.org は共有の公開エンドポイントで、負荷状況により 502 等の
 // HTTPエラーだけでなく、応答が大きすぎて壊れた(途中で切れた)JSONが返って
 // くることもあるため、JSON解析の失敗も含めてリトライする。
+// GET(URLクエリパラメータ)だと、VALUES句に語をたくさん詰めた大きなクエリで
+// エンコード後のURLが1万文字を超えることがあり、Wikidata側のエッジ/CDN層で
+// 592msほどの短時間で503(Wikimedia Error)が即座に返ってくる現象を確認した
+// (SPARQLエンジン側のタイムアウトではなく、リクエストライン長の制限と見られる)。
+// POST(クエリをリクエストボディに入れる)にすることでURL長の制限を回避できる。
 async function sparql(query, retries = 4){
-  const url = `${WIKIDATA_ENDPOINT}?query=${encodeURIComponent(query)}`;
   for(let attempt = 0; ; attempt++){
     try{
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/sparql-results+json', 'User-Agent': WIKIDATA_USER_AGENT }
+      const res = await fetch(WIKIDATA_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/sparql-results+json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': WIKIDATA_USER_AGENT,
+        },
+        body: `query=${encodeURIComponent(query)}`,
       });
       if(!res.ok) throw new Error(`Wikidata SPARQL error: ${res.status}`);
       const data = await res.json();
@@ -692,8 +705,8 @@ async function main(){
   ];
 
   console.log(`抽出できた語数の合計: ${out.length}`);
-  const outPath = path.join(ROOT, 'words-auto.json');
-  await fs.writeFile(outPath, JSON.stringify(out, null, 2) + '\n', 'utf-8');
+  const outPath = path.join(ROOT, 'words-auto.tsv');
+  await fs.writeFile(outPath, stringifyTSV(out), 'utf-8');
   console.log(`書き出し完了: ${outPath}`);
 }
 

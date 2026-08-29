@@ -1,4 +1,5 @@
 import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kana.js';
+import { parseTSV } from './tsv.js';
 
 (function(){
   const chainEl = document.getElementById('chain');
@@ -403,11 +404,11 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   // words-auto.json は無くても(未生成でも)動くようにする。
   async function loadWords(){
     const [coreRes, autoRes] = await Promise.allSettled([
-      fetch('words-core.json'),
-      fetch('words-auto.json'),
+      fetch('words-core.tsv'),
+      fetch('words-auto.tsv'),
     ]);
-    const core = coreRes.status === 'fulfilled' && coreRes.value.ok ? await coreRes.value.json() : [];
-    const auto = autoRes.status === 'fulfilled' && autoRes.value.ok ? await autoRes.value.json() : [];
+    const core = coreRes.status === 'fulfilled' && coreRes.value.ok ? parseTSV(await coreRes.value.text()) : [];
+    const auto = autoRes.status === 'fulfilled' && autoRes.value.ok ? parseTSV(await autoRes.value.text()) : [];
 
     const seen = new Set();
     const merged = [];

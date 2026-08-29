@@ -11,15 +11,22 @@ index.html          画面本体
 style.css            スタイル
 script.js             ゲームロジック(判定・辞書番のAI思考)
 kana.js               かな処理ユーティリティ(script.js / テストの両方から読み込む)
-words-core.json        手作業で日本語の意味を付けたコア辞書(約180語)
-words-auto.json        自動取得分の辞書(scripts/fetch-words.mjs が生成、未生成でも動作する)
-scripts/fetch-words.mjs  words-auto.json を自動生成するビルドスクリプト
+tsv.js                 words-*.tsv の読み書きユーティリティ(script.js / fetch-words.mjs 共通)
+words-core.tsv        手作業で日本語の意味を付けたコア辞書(約180語)
+words-auto.tsv        自動取得分の辞書(scripts/fetch-words.mjs が生成、未生成でも動作する)
+scripts/fetch-words.mjs  words-auto.tsv を自動生成するビルドスクリプト
 test/kana.test.mjs      語尾判定(analyzeEnding/startKana)のユニットテスト
 ```
 
-起動時、`script.js` は `words-core.json` と `words-auto.json` を両方読み込み、
-読み(reading)が重複する場合は `words-core.json` を優先してマージします。
-`words-auto.json` が無い(未生成の)状態でもコア辞書だけで動作します。
+辞書データはJSONではなくTSV(タブ区切り)形式です。表計算ソフト(Excel/Numbers/
+Googleスプレッドシート等)で開いて一覧・編集できるようにするためで、列は
+`w`(表記)`r`(読み)`m`(種別ラベルや英語glossなど)`t`(著名タグ、1なら辞書番が
+優先的に選ぶ)`d`(簡単な日本語の解説。あれば画面にはmの代わりにこちらを表示する)
+の5列です(`tsv.js` 参照)。`words-core.tsv` に語を追加する場合もこの形式に従ってください。
+
+起動時、`script.js` は `words-core.tsv` と `words-auto.tsv` を両方読み込み、
+読み(reading)が重複する場合は `words-core.tsv` を優先してマージします。
+`words-auto.tsv` が無い(未生成の)状態でもコア辞書だけで動作します。
 
 ## ルール仕様(重要)
 
@@ -35,7 +42,7 @@ test/kana.test.mjs      語尾判定(analyzeEnding/startKana)のユニットテ�
 - **あなたの手番には60秒の制限時間があります(強さに関わらず一律)。** 時間切れもその場で負けです。
   入力欄の上にあるバーが残り時間を示し、残り10秒を切ると赤く表示されます。時間切れの際は
   「ちなみに『○○』という言葉がありました」と、その時点で打てた語の一例を表示します。
-- 辞書番(AI)は `words-core.json` / `words-auto.json` の中からしか手を選べません。強さ「めちゃ強い」は、
+- 辞書番(AI)は `words-core.tsv` / `words-auto.tsv` の中からしか手を選べません。強さ「めちゃ強い」は、
   お互いが同じ基準(相手の選択肢を最も減らす手)で最適に打ち続けたと仮定して3手先まで読み、
   相手の選択肢が一番少なくなる手を選ぶ先読み(`script.js` の `minimaxOptions`)で実現しています。
 
@@ -63,7 +70,7 @@ Node標準の `node --test` で検証します。
 
 ## 語彙を増やす(自動化)
 
-`words-core.json` は手作業で日本語の意味を付けた約180語です。もっと語彙を増やしたい場合、
+`words-core.tsv` は手作業で日本語の意味を付けた約180語です。もっと語彙を増やしたい場合、
 [JMdict-simplified / JMnedict-simplified](https://github.com/scriptin/jmdict-simplified)
 (オープンな日本語辞書データ、CC BY-SA 4.0)から語を自動抽出するスクリプトを用意しています。
 
@@ -72,7 +79,7 @@ npm install
 npm run fetch-words
 ```
 
-これで `words-auto.json` が数万〜数十万語規模に生成されます(現在のリポジトリ同梱データは
+これで `words-auto.tsv` が数万〜数十万語規模に生成されます(現在のリポジトリ同梱データは
 約245,000語)。**このスクリプトの実行にAIやAPIトークンは一切使いません。GitHubやWikidataから
 公開データをダウンロードして加工するだけのビルドステップです。**
 
@@ -118,12 +125,25 @@ npm run fetch-words
   (char/dei/fict/creat/myth/leg)には伝記情報を要求しません(分類自体が根拠のため)。
   `scripts/fetch-words.mjs` 内の `CAPS` / `PERSON_TYPES_REQUIRE_BIO` で調整できます。
 
-### 既知のトレードオフ
+### 一般名詞・ことわざ/専門用語への日本語解説(d)の補完
 
-- JMdict由来の意味(gloss)は英語のみです。`words-auto.json` の一般名詞・ことわざ/故事成語・
-  専門用語・神話(JMdict由来)には `"(en) ..."` という注記付きで英語の意味がそのまま入ります。
-  Wikidata由来の語は日本語の説明文(無ければ種別ラベル)+出典タグ、JMnedict由来の固有名詞は
-  伝記情報(人物)または種別ラベル(地名など)を意味欄に入れています。
+JMdict由来の意味(gloss)は英語のみのため、一般名詞・ことわざ/故事成語・専門用語は
+Wikidataで表記が完全一致する項目を探し、見つかった日本語の説明文を `d` として追加しています
+(`enrichWithWikidataDescriptions`)。表記が同じでも別の意味の項目(同名の作品・人物・
+地名など)にヒットすることがあるため、あからさまに無関係と分かるもの(人間・映画・
+アルバム・曖昧さ回避ページ等の型、および説明文が『』年号「による」等の「作品らしい
+パターン」を含むもの)は除外していますが、それでも除外しきれず複数候補が残った場合は
+先頭の1件を採用します(＝読みの上での同音異義語として扱う。どちらの語義であっても
+実在する言葉であることに変わりはないため)。精度を上げたい場合は
+`ENTITY_TYPE_BLOCKLIST` / `NOISE_DESC_PATTERNS` を調整してください。
+
+### その他の既知のトレードオフ
+
+- 上記の`d`が無い語(まだWikidataとの一致が見つかっていない語)は、従来通り `m`
+  (種別ラベルや英語glossなど)を表示に使います。Wikidata由来の語(神話・著名人・
+  地名など)は最初から日本語の説明文を `d` に、種別ラベル+出典タグを `m` に
+  入れています。JMnedict由来の固有名詞は伝記情報(人物)または種別ラベル(地名など)
+  を `m` に入れています。
 - 人名の著名性判定はJMnedictの伝記情報(生没年表記)の有無に頼っているため、フルネームの
   エントリには伝記情報があっても、姓だけの別エントリ(例: 「シェイクスピア」単体)には
   伝記情報が付いていないことがあり、その場合は姓単体のエントリは採用されません。
@@ -146,13 +166,13 @@ npm run fetch-words
 
 静的ファイルのみで構成されているため、ビルドステップ無しでそのまま公開できます。
 リポジトリの Settings → Pages で「Deploy from a branch」を選び、`main` ブランチの
-ルート(`/`)を指定してください。`words-auto.json` を使う場合は、事前に
+ルート(`/`)を指定してください。`words-auto.tsv` を使う場合は、事前に
 `npm run fetch-words` を実行して生成物をコミットしておく必要があります
 (Pages はビルドを実行しないため)。
 
 ## ライセンス表記
 
-- `words-auto.json` を JMdict/JMnedict由来のデータで生成した場合は、EDRDGの利用条件に従い
+- `words-auto.tsv` を JMdict/JMnedict由来のデータで生成した場合は、EDRDGの利用条件に従い
   クレジット表記(例: "This application uses the JMdict and JMnedict dictionary files.
   These files are the property of the Electronic Dictionary Research and
   Development Group, and are used in conformance with the Group's licence.")
