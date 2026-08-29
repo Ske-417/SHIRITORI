@@ -77,6 +77,9 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     medallionLabel.innerHTML = 'この音<br>から';
   }
   function updateScore(){ userScoreEl.textContent = score.user; aiScoreEl.textContent = score.ai; }
+  // d(簡単な解説)があればそれを表示に使い、無ければ従来のm(種別ラベル/英語glossなど)に
+  // フォールバックする。dはまだ全語には付いていないため、この関数を通して常に安全に読む。
+  function entryMeaning(e){ return (e && (e.d || e.m)) || null; }
   function scrollToBottom(){ chainEl.scrollTop = chainEl.scrollHeight; }
 
   function markReading(reading, markFirst, markLast){
@@ -142,7 +145,7 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
 
     const dictHit = WORDS.find(e => e.w === input || e.r === input || e.r === hira);
     if(dictHit){
-      return { word: dictHit.w, reading: dictHit.r, meaning: dictHit.m };
+      return { word: dictHit.w, reading: dictHit.r, meaning: entryMeaning(dictHit) };
     }
     // 辞書外でも、純粋なかなであれば読みとしてそのまま信頼する
     if(/^[ぁ-んゔー]+$/.test(hira)){
@@ -373,7 +376,7 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     }
     usedReadings.add(move.e.r);
     score.ai++; updateScore();
-    renderCard({word: move.e.w, reading: move.e.r, meaning: move.e.m, by:'ai', requiredWasSet:true});
+    renderCard({word: move.e.w, reading: move.e.r, meaning: entryMeaning(move.e), by:'ai', requiredWasSet:true});
 
     // 辞書番の言葉が「ん」で終わっていれば、辞書番の即負け
     if(move.isN){

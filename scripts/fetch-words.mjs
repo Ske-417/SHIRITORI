@@ -152,7 +152,9 @@ async function downloadJson(asset){
 // t(tier)は「有名度」の目印。1=著名(都道府県・主要都市・広く知られた人物など)を付けておくと、
 // script.js側のAI選手選びで優先的に手として選ばれるようになる(kana.js側の判定には無関係)。
 // 通常語は t を省略してよい(その場合ファイル上は無印=tier0として扱われる)。
-function addEntry(out, seenReadings, cap, { w, r, m, t }){
+// d(簡単な日本語の解説。例: りんご→「バラ科の樹木、およびその食用となる果実のこと」)は
+// mとは別枠の項目。script.js側はd があればdを、無ければ従来通りmを表示に使う。
+function addEntry(out, seenReadings, cap, { w, r, m, t, d }){
   if(!KANA_ONLY.test(r)) return false;
   if(r.length < 2) return false;
   if(seenReadings.has(r)) return false;
@@ -160,6 +162,7 @@ function addEntry(out, seenReadings, cap, { w, r, m, t }){
   seenReadings.add(r);
   const entry = { w, r, m };
   if(t) entry.t = t;
+  if(d) entry.d = d;
   out.push(entry);
   return true;
 }
@@ -322,17 +325,18 @@ function extractProperNouns(data, seenReadings, famousPlaceNames){
     if(!KANA_ONLY.test(reading) || reading.length < 2) continue;
     const kanji = word.kanji && word.kanji[0];
     const w = (kanji && kanji.text) || kana.text;
-    // 都道府県・主要都市の表記(Wikidataから取得済み)と一致する地名はtier1にする。
-    // 読みはJMnedict側のものをそのまま使う(Wikidataの地名ラベルは漢字表記のみで
-    // 読みが分からないため、読みの情報源としては使えない)。
-    const t = (type === 'place' && famousPlaceNames.has(w)) ? 1 : undefined;
+    // 都道府県・主要都市の表記(Wikidataから取得済み)と一致する地名はtier1にし、
+    // Wikidataの日本語説明文があればdとして使う。読みはJMnedict側のものをそのまま
+    // 使う(Wikidataの地名ラベルは漢字表記のみで読みが分からないため)。
+    const isFamousPlace = type === 'place' && famousPlaceNames.has(w);
     const cand = {
       w,
       r: reading,
       hasKanji: !!kanji,
       type,
       m,
-      t,
+      t: isFamousPlace ? 1 : undefined,
+      d: isFamousPlace ? famousPlaceNames.get(w) : undefined,
     };
     if(!buckets.has(type)) buckets.set(type, []);
     buckets.get(type).push(cand);
@@ -349,7 +353,7 @@ function extractProperNouns(data, seenReadings, famousPlaceNames){
     let added = 0, famousAdded = 0;
     for(const cand of bucket){
       if(added >= cap) break;
-      if(addEntry(out, seenReadings, Infinity, { w: cand.w, r: cand.r, m: cand.m, t: cand.t })){
+      if(addEntry(out, seenReadings, Infinity, { w: cand.w, r: cand.r, m: cand.m, t: cand.t, d: cand.d })){
         added++;
         if(cand.t) famousAdded++;
       }
@@ -463,6 +467,7 @@ const WIKIDATA_JAPAN_PLACE_MIN_SITELINKS = 15;
 // かな表記が無い(=読みがWikidata側から分からない)ため、ここでは読みの情報源としては
 // 使わず、JMnedict側で既に読み付きで抽出済みの地名エントリのうち「この漢字表記に
 // 一致するもの」を tier1(著名優先)としてマークするための照合キー集合として使う。
+// 戻り値は「表記(漢字) -> Wikidataの日本語説明文(無ければundefined)」のMap。
 async function fetchFamousJapanPlaceNames(){
   const prefectures = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
     ?item wdt:P31 wd:Q50337 ; wikibase:sitelinks ?sitelinks .
@@ -474,9 +479,15 @@ async function fetchFamousJapanPlaceNames(){
     FILTER(?sitelinks >= ${WIKIDATA_JAPAN_PLACE_MIN_SITELINKS})
     ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
   } LIMIT ${limit} OFFSET ${offset}`);
-  const names = new Set();
-  for(const row of [...prefectures, ...cities]) names.add(row.itemLabel.value);
-  console.log(`Wikidata(日本の著名な地名の表記): 都道府県${prefectures.length}件 + 都市${cities.length}件 = ${names.size}件(重複除去後)`);
+  const rows = [...prefectures, ...cities];
+  const qids = rows.map(row => row.item.value.split('/').pop());
+  const descMap = await fetchWikidataDescriptions(qids);
+  const names = new Map();
+  for(const row of rows){
+    const qid = row.item.value.split('/').pop();
+    names.set(row.itemLabel.value, descMap.get(qid));
+  }
+  console.log(`Wikidata(日本の著名な地名の表記): 都道府県${prefectures.length}件 + 都市${cities.length}件 = ${names.size}件(重複除去後、説明文あり${descMap.size}件)`);
   return names;
 }
 
@@ -521,9 +532,8 @@ async function extractWikidataBeings(seenReadings){
       const descMap = await fetchWikidataDescriptions(candidates.map(c => c.qid));
       let added = 0;
       for(const c of candidates){
-        const desc = descMap.get(c.qid);
-        const m = desc ? `${desc} [Wikidata:${c.qid}]` : `${cat.label} [Wikidata:${c.qid}]`;
-        if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m })) added++;
+        const m = `${cat.label} [Wikidata:${c.qid}]`;
+        if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m, d: descMap.get(c.qid) })) added++;
       }
       console.log(`Wikidata(${cat.label}): ${added}語(説明文あり ${descMap.size}件)`);
     }catch(err){
@@ -555,9 +565,8 @@ async function extractWikidataHumans(seenReadings){
     const out = [];
     let added = 0, famousAdded = 0;
     for(const c of candidates){
-      const desc = descMap.get(c.qid);
-      const m = desc ? `${desc} [Wikidata:${c.qid}]` : `著名人 [Wikidata:${c.qid}]`;
-      if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m, t: c.famous ? 1 : undefined })){
+      const m = `著名人 [Wikidata:${c.qid}]`;
+      if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m, d: descMap.get(c.qid), t: c.famous ? 1 : undefined })){
         added++;
         if(c.famous) famousAdded++;
       }
@@ -576,8 +585,71 @@ async function fetchFamousJapanPlaceNamesSafe(){
     return await fetchFamousJapanPlaceNames();
   }catch(err){
     console.warn(`Wikidata(日本の著名な地名の表記)の取得に失敗しました: ${err.message} — 地名のtier1付与はスキップします`);
-    return new Set();
+    return new Map();
   }
+}
+
+// JMdict由来のカテゴリ(一般名詞・ことわざ/故事成語・専門用語)には日本語の説明文が無い
+// (英語glossの m しか無い)ため、Wikidataで「日本語ラベルが表記(entry.w)と完全一致する
+// 項目」を探し、見つかった日本語説明文を d として追加する。
+//
+// 表記が同じでも別の意味の項目(同名の作品・キャラクター・軍艦・雑誌など)に
+// ヒットすることがある。あからさまに無関係と分かるもの(人物/作品/軍艦などの型、
+// および説明文が『』年号やによる等の「作品らしいパターン」を含むもの)は
+// ENTITY_TYPE_BLOCKLIST / NOISE_DESC_PATTERNS で除外するが、除外しきれず複数候補が
+// 残った場合は先頭の1件を採用する(=読みの上での同音異義語として扱う。
+// どちらの語義であっても実在する言葉であることに変わりはないため)。
+const ENTITY_TYPE_BLOCKLIST = [
+  'Q5', 'Q11424', 'Q482994', 'Q134556', 'Q7366', 'Q215380', 'Q7889',
+  'Q101352', 'Q202444', 'Q4167410', 'Q486972', 'Q515',
+];
+const NOISE_DESC_EXACT = new Set(['漢字', 'ひらがな', 'カタカナ']);
+const NOISE_DESC_PATTERNS = [
+  /『.*』/, /「.*」/, /\d{4}年/, /による/, /作曲/, /作詞/,
+  /の登場人物/, /に登場/, /クルアーン/, /曲$/, /小説/, /映画/, /漫画/, /ドラマ/,
+  /アルバム/, /シングル/, /楽曲/, /戯曲/, /彫刻/, /絵画/, /艦$/, /駆逐艦/, /軍艦/,
+  /の姓/, /の名/, /人名/, /町丁/, /大字/, /地名/, /字$/, /曖昧さ回避/,
+  /雑誌/, /タロット/, /ムック/, /散文詩/, /の演目/,
+];
+function isUsableWikidataDesc(desc){
+  if(NOISE_DESC_EXACT.has(desc)) return false;
+  return !NOISE_DESC_PATTERNS.some(re => re.test(desc));
+}
+
+async function enrichWithWikidataDescriptions(entries, label){
+  const targets = entries.filter(e => !e.d);
+  if(targets.length === 0) return;
+  console.log(`Wikidataとの表記一致で説明文を補完中(${label}): 対象${targets.length}語(数分かかることがあります)`);
+  const CHUNK = 200;
+  const badTypeValues = ENTITY_TYPE_BLOCKLIST.map(q => `wd:${q}`).join(' ');
+  let filled = 0;
+  for(let i = 0; i < targets.length; i += CHUNK){
+    const chunk = targets.slice(i, i + CHUNK);
+    const values = chunk.map(e => `"${e.w.replace(/"/g, '\\"')}"@ja`).join(' ');
+    const query = `SELECT ?label ?desc WHERE {
+      VALUES ?label { ${values} }
+      ?item rdfs:label ?label .
+      ?item schema:description ?desc . FILTER(LANG(?desc)='ja')
+      FILTER NOT EXISTS { ?item wdt:P31 ?badType . VALUES ?badType { ${badTypeValues} } }
+    }`;
+    try{
+      const rows = await sparql(query);
+      const descByLabel = new Map();
+      for(const row of rows){
+        const l = row.label.value, d = row.desc.value;
+        if(!isUsableWikidataDesc(d)) continue;
+        if(!descByLabel.has(l)) descByLabel.set(l, d); // 除外しきれず複数残った場合は先頭の1件
+      }
+      for(const e of chunk){
+        const d = descByLabel.get(e.w);
+        if(d){ e.d = d; filled++; }
+      }
+    }catch(err){
+      console.warn(`  チャンク(${i}-${i + chunk.length})が失敗したためスキップ: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 800));
+  }
+  console.log(`  → ${label}: ${filled}語に説明文を追加できました`);
 }
 
 async function main(){
@@ -598,10 +670,21 @@ async function main(){
   // JMdict/JMnedictの単純な種別ラベルより情報量が多いため、読みが重複した場合は
   // Wikidata側を優先する(=先に登録する)順序にしている。
   const seenReadings = new Set();
+  const nouns = extractNouns(commonData, seenReadings);
+  const proverbs = extractProverbsAndYoji(fullData, seenReadings);
+  const fieldTerms = extractFieldTerms(fullData, seenReadings);
+
+  // JMdict由来で英語glossしか無い一般名詞・ことわざ/専門用語に、Wikidataとの表記一致で
+  // 日本語の簡単な説明文(d)を補完する(例: りんご→「セイヨウリンゴの果実」)。
+  // 件数が多いため時間がかかる。
+  await enrichWithWikidataDescriptions(nouns, '一般名詞');
+  await enrichWithWikidataDescriptions(proverbs, 'ことわざ・故事成語');
+  await enrichWithWikidataDescriptions(fieldTerms, '専門用語');
+
   const out = [
-    ...extractNouns(commonData, seenReadings),
-    ...extractProverbsAndYoji(fullData, seenReadings),
-    ...extractFieldTerms(fullData, seenReadings),
+    ...nouns,
+    ...proverbs,
+    ...fieldTerms,
     ...(await extractWikidataBeings(seenReadings)),
     ...(await extractWikidataHumans(seenReadings)),
     ...extractMythology(fullData, seenReadings),
