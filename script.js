@@ -79,25 +79,6 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   function updateScore(){ userScoreEl.textContent = score.user; aiScoreEl.textContent = score.ai; }
   function scrollToBottom(){ chainEl.scrollTop = chainEl.scrollHeight; }
 
-  function hankoSVG(pass){
-    const color = pass ? 'var(--stamp)' : 'var(--ink-faint)';
-    const label = pass ? '合格' : '却下';
-    const filterId = 'ink' + Math.random().toString(36).slice(2,8);
-    return `<svg viewBox="0 0 100 100" width="100%" height="100%">
-      <defs>
-        <filter id="${filterId}">
-          <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="2" result="n"/>
-          <feDisplacementMap in="SourceGraphic" in2="n" scale="4"/>
-        </filter>
-      </defs>
-      <g filter="url(#${filterId})">
-        <circle cx="50" cy="50" r="42" fill="none" stroke="${color}" stroke-width="5"/>
-        <circle cx="50" cy="50" r="33" fill="none" stroke="${color}" stroke-width="2"/>
-        <text x="50" y="43" text-anchor="middle" font-size="19" fill="${color}" font-family="'Hiragino Mincho ProN','Yu Mincho',serif" font-weight="700">${label[0]}</text>
-        <text x="50" y="66" text-anchor="middle" font-size="19" fill="${color}" font-family="'Hiragino Mincho ProN','Yu Mincho',serif" font-weight="700">${label[1]}</text>
-      </g>
-    </svg>`;
-  }
   function markReading(reading, markFirst, markLast){
     const chars = reading.split('');
     return chars.map((c,i) => {
@@ -113,11 +94,6 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     const card = document.createElement('div');
     card.className = 'card ' + by + (invalid ? ' invalid' : '');
 
-    const seal = document.createElement('div');
-    seal.className = 'seal';
-    seal.textContent = invalid ? '?' : (by==='user' ? '客' : '番');
-    card.appendChild(seal);
-
     if(!invalid){
       const wordRow = document.createElement('div');
       wordRow.className = 'word-row';
@@ -127,15 +103,11 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
       wordRow.appendChild(w); wordRow.appendChild(r);
       card.appendChild(wordRow);
       if(meaning){ const m = document.createElement('div'); m.className='meaning'; m.textContent = meaning; card.appendChild(m); }
-      const stamp = document.createElement('div'); stamp.className = 'hanko'; stamp.innerHTML = hankoSVG(true);
-      card.appendChild(stamp);
     }else{
       const w = document.createElement('div'); w.className='word'; w.style.fontSize='16px'; w.textContent = word || '(不明)';
       card.appendChild(w);
       const rs = document.createElement('div'); rs.className='reason'; rs.textContent = reason || '無効です';
       card.appendChild(rs);
-      const stamp = document.createElement('div'); stamp.className = 'hanko'; stamp.innerHTML = hankoSVG(false);
-      card.appendChild(stamp);
     }
     chainEl.appendChild(card);
     scrollToBottom();
