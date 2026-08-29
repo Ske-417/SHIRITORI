@@ -147,6 +147,14 @@ button.restart{
   cursor:pointer;
 }
 button.restart:hover{border-color:var(--ink); color:var(--ink);}
+.timer-toggle{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  cursor:pointer;
+  user-select:none;
+}
+.timer-toggle input{accent-color:var(--indigo); cursor:pointer;}
 
 main{
   flex:1;

@@ -14,6 +14,7 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   const wordCountEl = document.getElementById('wordCount');
   const timerFill = document.getElementById('timerFill');
   const timerLabel = document.getElementById('timerLabel');
+  const timerToggle = document.getElementById('timerToggle');
 
   let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない
   let usedReadings = new Set(); // これまでに場に出た「読み」(ユーザー・AI問わず)
@@ -30,11 +31,12 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
     timerFill.style.width = '100%';
     timerFill.classList.remove('urgent');
-    timerLabel.textContent = TURN_TIME_LIMIT + '秒';
+    timerLabel.textContent = timerToggle.checked ? (TURN_TIME_LIMIT + '秒') : 'OFF';
     timerLabel.classList.remove('urgent');
   }
   function startTurnTimer(){
     clearTurnTimer();
+    if(!timerToggle.checked) return; // OFFのときは計測しない(無制限)
     turnRemaining = TURN_TIME_LIMIT;
     turnInterval = setInterval(() => {
       turnRemaining--;
@@ -433,6 +435,15 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     handleSubmit();
   });
   restartBtn.addEventListener('click', restart);
+  // ON/OFFの切り替えを即座に反映する(対局中でも切り替え可能)。
+  // OFFにした瞬間は計測をやめ、ONに戻した瞬間はあなたの手番であれば新たに計測を始める。
+  timerToggle.addEventListener('change', () => {
+    if(timerToggle.checked){
+      if(!busy && !gameOver) startTurnTimer();
+    }else{
+      clearTurnTimer();
+    }
+  });
 
   init();
 })();
