@@ -222,6 +222,25 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
   const HARD_OUTER_CAP = 50;       // 一手目候補のうち、深く読むのは有望な上位何件までか
   const HARD_LOOKAHEAD_DEPTH = 2;  // 0=1手先読み(従来通り) 1=2手先読み 2=3手先読み
 
+  // 語彙(words-auto.json)には都道府県・主要都市・広く知られた偉人などに
+  // t:1(著名)の目印が付いている。数万〜数十万語の中に埋もれて滅多に選ばれない
+  // ということがないよう、AIの手選びで優先的に(=高い確率で)選ぶための重み。
+  // 0にはしない(=完全に選ばなくなる)ことで無名な語(ニッチな語)も出続けるようにする。
+  const FAME_WEIGHT = 6;
+  const HARD_FAMOUS_SHORTLIST = 20;   // 上位HARD_OUTER_CAPに入らなくても、著名な語は別枠でこの件数まで深掘り対象に加える
+  const HARD_NEAR_OPTIMAL_MARGIN = 1; // 最善のdeepScoreからこの差までは「ほぼ互角」として著名優先の対象にする
+  function weightedPick(list){
+    if(list.length === 1) return list[0];
+    const weights = list.map(s => s.e.t === 1 ? FAME_WEIGHT : 1);
+    const total = weights.reduce((a,b) => a+b, 0);
+    let r = Math.random() * total;
+    for(let i = 0; i < list.length; i++){
+      r -= weights[i];
+      if(r <= 0) return list[i];
+    }
+    return list[list.length-1];
+  }
+
   // kana から始まる語を選ぶ番の人にとって「その後どれだけ選択肢が少ないか」を depth 手先まで評価する。
   // depth<=0 ならその場の候補数をそのまま返す(=1手先読み相当)。depth>0 では、
   // お互いが同じ基準(相手の選択肢を最も減らす手)で最適に打ち続けたと仮定して深く評価する。
@@ -272,19 +291,28 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
     const usable = safe.length ? safe : scored; // 安全な手が無ければ「ん」で終わる手を仕方なく選ぶ(=辞書番の自滅)
 
     if(strength === 'easy'){
-      return usable[Math.floor(Math.random()*usable.length)];
+      return weightedPick(usable);
     }
     if(strength === 'normal'){
       usable.sort((a,b) => a.approxOptions - b.approxOptions);
       const mid = usable.slice(0, Math.max(1, Math.ceil(usable.length*0.6)));
-      return mid[Math.floor(Math.random()*mid.length)];
+      return weightedPick(mid);
     }
 
     // hard: まず概算値(kanaSizeApprox)で有望な候補に絞り込み、その上位だけを
     // 使用済みを考慮した正確な探索で2〜3手先まで深掘りして最終決定する
     // (合法手すべてを正確に数えてから深く読むと、語彙が大きいときに重すぎるため)。
+    // 上位HARD_OUTER_CAP件に加えて、そこに入らなかった著名な語も別枠で深掘り対象に加える
+    // (でないと数十万語の中で著名な語がそもそも検討すらされないことがあるため)。
     usable.sort((a,b) => a.approxOptions - b.approxOptions);
-    const deepPool = usable.slice(0, HARD_OUTER_CAP);
+    const deepPoolSet = new Set(usable.slice(0, HARD_OUTER_CAP));
+    for(const s of usable){
+      if(s.e.t === 1){
+        if(deepPoolSet.size - HARD_OUTER_CAP >= HARD_FAMOUS_SHORTLIST) break;
+        deepPoolSet.add(s);
+      }
+    }
+    const deepPool = [...deepPoolSet];
     for(const s of deepPool){
       if(s.isN){ s.deepScore = 0; continue; }
       usedReadings.add(s.e.r);
@@ -292,8 +320,10 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
       usedReadings.delete(s.e.r);
     }
     deepPool.sort((a,b) => a.deepScore - b.deepScore);
-    const best = deepPool.filter(s => s.deepScore === deepPool[0].deepScore);
-    return best[Math.floor(Math.random()*best.length)];
+    const bestScore = deepPool[0].deepScore;
+    // 最善とほぼ互角(誤差HARD_NEAR_OPTIMAL_MARGIN以内)の手の中から、著名な語を優先しつつ選ぶ。
+    const nearBest = deepPool.filter(s => s.deepScore <= bestScore + HARD_NEAR_OPTIMAL_MARGIN);
+    return weightedPick(nearBest);
   }
 
   function setBusy(v){

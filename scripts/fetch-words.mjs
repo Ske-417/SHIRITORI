@@ -149,13 +149,18 @@ async function downloadJson(asset){
   return JSON.parse(zip.readAsText(entry));
 }
 
-function addEntry(out, seenReadings, cap, { w, r, m }){
+// t(tier)は「有名度」の目印。1=著名(都道府県・主要都市・広く知られた人物など)を付けておくと、
+// script.js側のAI選手選びで優先的に手として選ばれるようになる(kana.js側の判定には無関係)。
+// 通常語は t を省略してよい(その場合ファイル上は無印=tier0として扱われる)。
+function addEntry(out, seenReadings, cap, { w, r, m, t }){
   if(!KANA_ONLY.test(r)) return false;
   if(r.length < 2) return false;
   if(seenReadings.has(r)) return false;
   if(out.length >= cap) return false;
   seenReadings.add(r);
-  out.push({ w, r, m });
+  const entry = { w, r, m };
+  if(t) entry.t = t;
+  out.push(entry);
   return true;
 }
 
@@ -174,10 +179,14 @@ function extractNouns(data, seenReadings){
     const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
     if(!gloss) continue;
 
+    // JMdictの「よく使われる(common)」フラグが付いた語は、りんご・机のような
+    // 誰でも知っている一般語である。数万〜数十万語の専門用語・固有名詞に埋もれて
+    // 出にくくならないよう、この一般名詞は丸ごと tier1(著名優先)にしている。
     addEntry(out, seenReadings, CAPS.noun, {
       w: (kanjiCommon && kanjiCommon.text) || kanaCommon.text,
       r: reading,
       m: `(en) ${gloss.text}`,
+      t: 1,
     });
   }
   console.log(`一般名詞: ${out.length}語`);
@@ -276,8 +285,9 @@ function getBioText(translations){
 
 // 固有名詞の並び優先度(place の上限に収める際、海外由来と推定できる語を優先する)。
 function rankTier(cand){
-  if(cand.type === 'place' && !cand.hasKanji) return 0;
-  return 1;
+  if(cand.type === 'place' && cand.t === 1) return 0; // 著名な都道府県・主要都市
+  if(cand.type === 'place' && !cand.hasKanji) return 1; // 海外由来と推定できる地名
+  return 2;
 }
 
 function primaryNameType(word){
@@ -287,8 +297,8 @@ function primaryNameType(word){
   return null;
 }
 
-function extractProperNouns(data, seenReadings){
-  const buckets = new Map(); // type -> array of {w,r,hasKanji,type,m}
+function extractProperNouns(data, seenReadings, famousPlaceNames){
+  const buckets = new Map(); // type -> array of {w,r,hasKanji,type,m,t}
   for(const word of data.words){
     const kana = word.kana && word.kana[0];
     if(!kana) continue;
@@ -311,12 +321,18 @@ function extractProperNouns(data, seenReadings){
     const reading = toHiragana(kana.text);
     if(!KANA_ONLY.test(reading) || reading.length < 2) continue;
     const kanji = word.kanji && word.kanji[0];
+    const w = (kanji && kanji.text) || kana.text;
+    // 都道府県・主要都市の表記(Wikidataから取得済み)と一致する地名はtier1にする。
+    // 読みはJMnedict側のものをそのまま使う(Wikidataの地名ラベルは漢字表記のみで
+    // 読みが分からないため、読みの情報源としては使えない)。
+    const t = (type === 'place' && famousPlaceNames.has(w)) ? 1 : undefined;
     const cand = {
-      w: (kanji && kanji.text) || kana.text,
+      w,
       r: reading,
       hasKanji: !!kanji,
       type,
       m,
+      t,
     };
     if(!buckets.has(type)) buckets.set(type, []);
     buckets.get(type).push(cand);
@@ -326,15 +342,19 @@ function extractProperNouns(data, seenReadings){
   for(const type of NAME_TYPE_PRIORITY){
     const bucket = buckets.get(type);
     if(!bucket) continue;
-    // rankTier: place について海外由来(漢字表記なし)を優先して上限内に収める。
-    // Array#sort は安定ソートなので、同ティア内は元の並び順を保つ。
+    // rankTier: 著名な地名、および(placeについて)海外由来(漢字表記なし)を優先して
+    // 上限内に収める。Array#sort は安定ソートなので、同ティア内は元の並び順を保つ。
     bucket.sort((a, b) => rankTier(a) - rankTier(b));
     const cap = CAPS[type] ?? CAP_DEFAULT;
-    let added = 0;
+    let added = 0, famousAdded = 0;
     for(const cand of bucket){
       if(added >= cap) break;
-      if(addEntry(out, seenReadings, Infinity, { w: cand.w, r: cand.r, m: cand.m })) added++;
+      if(addEntry(out, seenReadings, Infinity, { w: cand.w, r: cand.r, m: cand.m, t: cand.t })){
+        added++;
+        if(cand.t) famousAdded++;
+      }
     }
+    if(type === 'place') console.log(`  地名のうちtier1(著名な都道府県・主要都市): ${famousAdded}件`);
   }
   console.log(`固有名詞: ${out.length}語`);
   return out;
@@ -420,13 +440,44 @@ async function fetchWikidataLabels(qid, directOnly, minSitelinks){
 // 「広く知られている人物」だけをクエリ側で選別する。MIN_SITELINKS を上げるほど
 // 世界的に有名な人物に絞られ、クエリも軽くなる(下げすぎるとタイムアウトしやすい)。
 const WIKIDATA_HUMAN_MIN_SITELINKS = 12;
+// この件数以上の言語版ウィキペディアに記事がある人物は「世界的に広く知られた偉人」と
+// みなし、tier1(著名優先)を付ける。sitelinksをSELECTしておくことで、後段で
+// クエリを打ち直さずにそのまま判定に使える。
+const WIKIDATA_HUMAN_FAMOUS_SITELINKS = 40;
 async function fetchWikidataNotableHumans(){
-  return sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
+  return sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel ?sitelinks WHERE {
     ?article schema:about ?item ; schema:isPartOf <https://ja.wikipedia.org/> .
     ?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sitelinks .
     FILTER(?sitelinks >= ${WIKIDATA_HUMAN_MIN_SITELINKS})
     ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
   } LIMIT ${limit} OFFSET ${offset}`);
+}
+
+// 都道府県・日本国内の主要都市(sitelinksで足切り)をWikidataから抽出する。
+// JMnedictのplace種別(上限150,000件)は無名な地名も大量に含み、AIの手の中で
+// 有名な地名が埋もれてしまうため、確実に著名だと分かる地名を tier1 として
+// 別枠で確保しておく。
+const WIKIDATA_JAPAN_PLACE_MIN_SITELINKS = 15;
+// 都道府県・日本国内の主要都市の「表記(漢字)」だけをWikidataから取得する。
+// 日本の地名のWikidata日本語ラベルはほぼ全て漢字表記(例: 東京都、大阪市)であり、
+// かな表記が無い(=読みがWikidata側から分からない)ため、ここでは読みの情報源としては
+// 使わず、JMnedict側で既に読み付きで抽出済みの地名エントリのうち「この漢字表記に
+// 一致するもの」を tier1(著名優先)としてマークするための照合キー集合として使う。
+async function fetchFamousJapanPlaceNames(){
+  const prefectures = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
+    ?item wdt:P31 wd:Q50337 ; wikibase:sitelinks ?sitelinks .
+    FILTER(?sitelinks >= ${WIKIDATA_JAPAN_PLACE_MIN_SITELINKS})
+    ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
+  } LIMIT ${limit} OFFSET ${offset}`);
+  const cities = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
+    ?item wdt:P17 wd:Q17 ; wdt:P31/wdt:P279* wd:Q515 ; wikibase:sitelinks ?sitelinks .
+    FILTER(?sitelinks >= ${WIKIDATA_JAPAN_PLACE_MIN_SITELINKS})
+    ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
+  } LIMIT ${limit} OFFSET ${offset}`);
+  const names = new Set();
+  for(const row of [...prefectures, ...cities]) names.add(row.itemLabel.value);
+  console.log(`Wikidata(日本の著名な地名の表記): 都道府県${prefectures.length}件 + 都市${cities.length}件 = ${names.size}件(重複除去後)`);
+  return names;
 }
 
 // 説明文はラベル取得とは別クエリでバッチ取得する(1クエリにまとめるとタイムアウトしやすいため)。
@@ -497,21 +548,35 @@ async function extractWikidataHumans(seenReadings){
       if(!KANA_ONLY.test(hira) || hira.length < 2) continue;
       if(seenLocal.has(hira)) continue;
       seenLocal.add(hira);
-      candidates.push({ w: row.itemLabel.value, r: hira, qid: row.item.value.split('/').pop() });
+      const sitelinks = Number(row.sitelinks.value);
+      candidates.push({ w: row.itemLabel.value, r: hira, qid: row.item.value.split('/').pop(), famous: sitelinks >= WIKIDATA_HUMAN_FAMOUS_SITELINKS });
     }
     const descMap = await fetchWikidataDescriptions(candidates.map(c => c.qid));
     const out = [];
-    let added = 0;
+    let added = 0, famousAdded = 0;
     for(const c of candidates){
       const desc = descMap.get(c.qid);
       const m = desc ? `${desc} [Wikidata:${c.qid}]` : `著名人 [Wikidata:${c.qid}]`;
-      if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m })) added++;
+      if(addEntry(out, seenReadings, Infinity, { w: c.w, r: c.r, m, t: c.famous ? 1 : undefined })){
+        added++;
+        if(c.famous) famousAdded++;
+      }
     }
-    console.log(`Wikidata(著名人): ${added}語(説明文あり ${descMap.size}件)`);
+    console.log(`Wikidata(著名人): ${added}語(説明文あり ${descMap.size}件、うちtier1(${WIKIDATA_HUMAN_FAMOUS_SITELINKS}言語版以上) ${famousAdded}件)`);
     return out;
   }catch(err){
     console.warn(`Wikidata(著名人)の取得に失敗しました: ${err.message} — このカテゴリはスキップします`);
     return [];
+  }
+}
+
+// 都道府県・日本国内の主要都市を tier1(著名優先)として抽出する。
+async function fetchFamousJapanPlaceNamesSafe(){
+  try{
+    return await fetchFamousJapanPlaceNames();
+  }catch(err){
+    console.warn(`Wikidata(日本の著名な地名の表記)の取得に失敗しました: ${err.message} — 地名のtier1付与はスキップします`);
+    return new Set();
   }
 }
 
@@ -540,7 +605,7 @@ async function main(){
     ...(await extractWikidataBeings(seenReadings)),
     ...(await extractWikidataHumans(seenReadings)),
     ...extractMythology(fullData, seenReadings),
-    ...extractProperNouns(neData, seenReadings),
+    ...extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe()),
   ];
 
   console.log(`抽出できた語数の合計: ${out.length}`);
