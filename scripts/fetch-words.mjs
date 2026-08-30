@@ -400,6 +400,7 @@ const WIKIDATA_USER_AGENT = 'shiritori-dojo-fetch-words/1.0 (https://github.com/
 // POST(クエリをリクエストボディに入れる)にすることでURL長の制限を回避できる。
 async function sparql(query, retries = 4){
   for(let attempt = 0; ; attempt++){
+    let rateLimited = false;
     try{
       const res = await fetch(WIKIDATA_ENDPOINT, {
         method: 'POST',
@@ -410,12 +411,19 @@ async function sparql(query, retries = 4){
         },
         body: `query=${encodeURIComponent(query)}`,
       });
-      if(!res.ok) throw new Error(`Wikidata SPARQL error: ${res.status}`);
+      if(!res.ok){
+        rateLimited = res.status === 429;
+        throw new Error(`Wikidata SPARQL error: ${res.status}`);
+      }
       const data = await res.json();
       return data.results.bindings;
     }catch(err){
       if(attempt >= retries) throw err;
-      await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+      // 429(レート制限)は通常のエラーより長めに待たないと、以降のリクエストも
+      // 連鎖的に失敗し続ける(実際に一度発生すると後続チャンクが軒並み失敗する
+      // 現象を確認した)ため、それ以外のエラーより待ち時間を長く取る。
+      const base = rateLimited ? 15000 : 3000;
+      await new Promise(r => setTimeout(r, base * (attempt + 1)));
     }
   }
 }
@@ -525,7 +533,7 @@ async function fetchWikidataDescriptions(qids){
       // このチャンクだけ諦める(該当語は種別ラベルにフォールバックするので致命的ではない)。
       console.warn(`  説明文取得チャンク(${i}-${i+chunk.length})が失敗したためスキップします: ${err.message}`);
     }
-    await new Promise(r => setTimeout(r, 800)); // Wikidataへの負荷を抑えるための小休止
+    await new Promise(r => setTimeout(r, 1500)); // Wikidataへの負荷を抑えるための小休止
   }
   return out;
 }
@@ -683,7 +691,7 @@ async function enrichWithWikidataDescriptions(entries, label){
     }catch(err){
       console.warn(`  チャンク(${i}-${i + chunk.length})が失敗したためスキップ: ${err.message}`);
     }
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 1500));
   }
   console.log(`  → ${label}: ${filled}語に説明文を追加できました`);
 }
@@ -724,9 +732,50 @@ async function enrichPersonDescriptions(entries){
     }catch(err){
       console.warn(`  チャンク(${i}-${i + chunk.length})が失敗したためスキップ: ${err.message}`);
     }
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 1500));
   }
   console.log(`  → 人物: ${filled}語に説明文を追加できました`);
+}
+
+// JMnedictの駅名/組織名/企業名/作品名/製品名は種別ラベルのみで説明文(d)が無いため、
+// Wikidataで「日本語ラベルが表記(entry.w)と完全一致し、かつ指定クラスのインスタンス
+// (P31/P279*で指定QIDのいずれかに到達する)である項目」を探して日本語の説明文を補う。
+// enrichPersonDescriptionsと同様、種別が分かっているのでクラスのホワイトリストで
+// 絞り込め、同名の無関係な項目に誤ってヒットすることはほぼ無い。
+async function enrichByWikidataClass(entries, classQids, label){
+  const targets = entries.filter(e => !e.d);
+  if(targets.length === 0) return;
+  console.log(`Wikidataとの表記一致で${label}の説明文を補完中: 対象${targets.length}語(数分かかることがあります)`);
+  const CHUNK = 200;
+  const classValues = classQids.map(q => `wd:${q}`).join(' ');
+  let filled = 0;
+  for(let i = 0; i < targets.length; i += CHUNK){
+    const chunk = targets.slice(i, i + CHUNK);
+    const values = chunk.map(e => `"${e.w.replace(/"/g, '\\"')}"@ja`).join(' ');
+    const query = `SELECT ?label ?desc WHERE {
+      VALUES ?label { ${values} }
+      ?item rdfs:label ?label .
+      ?item wdt:P31/wdt:P279* ?class . VALUES ?class { ${classValues} }
+      ?item schema:description ?desc . FILTER(LANG(?desc)='ja')
+    }`;
+    try{
+      const rows = await sparql(query);
+      const descByLabel = new Map();
+      for(const row of rows){
+        const l = row.label.value, d = row.desc.value;
+        if(!isUsableWikidataDesc(d)) continue;
+        if(!descByLabel.has(l)) descByLabel.set(l, d);
+      }
+      for(const e of chunk){
+        const d = descByLabel.get(e.w);
+        if(d){ e.d = d; filled++; }
+      }
+    }catch(err){
+      console.warn(`  チャンク(${i}-${i + chunk.length})が失敗したためスキップ: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  console.log(`  → ${label}: ${filled}語に説明文を追加できました`);
 }
 
 async function main(){
@@ -762,6 +811,13 @@ async function main(){
   // JMnedict由来の著名人は英語の伝記文しか無いため、Wikidataとの表記一致(かつ人間限定)で
   // 日本語の説明文(d)を補う。見つかった分だけ「誰なのか」が表示されるようになる。
   await enrichPersonDescriptions(properNouns.personEntries);
+  // 駅名・組織名・企業名・作品名・製品名は種別ラベルのみで説明文が無いため、
+  // Wikidataとの表記一致(かつ各カテゴリのクラス限定)で日本語の説明文を補う。
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '駅名'), ['Q55488'], '駅名');
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '組織名'), ['Q43229'], '組織名');
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '企業名'), ['Q4830453', 'Q783794'], '企業名');
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), ['Q386724'], '作品名');
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '製品名'), ['Q2424752'], '製品名');
 
   const out = [
     ...nouns,
