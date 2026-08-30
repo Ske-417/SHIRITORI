@@ -331,17 +331,17 @@ main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
   .subtitle{max-width:none;}
   .content{height:100%; min-height:0;}
   main{
-    max-width:1080px;
+    max-width:760px;
     width:100%;
     margin:0 auto;
     padding:28px 32px 130px;
   }
   .input-bar{
-    max-width:1080px;
+    max-width:760px;
     width:100%;
     margin:0 auto;
     padding:14px 32px 26px;
   }
-  .card{max-width:min(86%, 640px);}
-  .thinking-card{max-width:min(66%, 480px);}
+  .card{max-width:min(82%, 520px);}
+  .thinking-card{max-width:min(60%, 380px);}
 }

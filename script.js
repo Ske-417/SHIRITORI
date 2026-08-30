@@ -35,26 +35,38 @@ import { parseTSV } from './tsv.js';
     timerLabel.textContent = timerToggle.checked ? (TURN_TIME_LIMIT + '秒') : 'OFF';
     timerLabel.classList.remove('urgent');
   }
+  function tickTurnTimer(){
+    turnRemaining--;
+    if(turnRemaining <= 0){
+      clearInterval(turnInterval); turnInterval = null;
+      timerFill.style.width = '0%';
+      timerLabel.textContent = '0秒';
+      handleTimeout();
+      return;
+    }
+    const pct = Math.max(0, (turnRemaining / TURN_TIME_LIMIT) * 100);
+    timerFill.style.width = pct + '%';
+    timerLabel.textContent = turnRemaining + '秒';
+    const urgent = turnRemaining <= 10;
+    timerFill.classList.toggle('urgent', urgent);
+    timerLabel.classList.toggle('urgent', urgent);
+  }
+  // 新しい手番を丸ごと開始する(持ち時間をTURN_TIME_LIMITに戻す)。
   function startTurnTimer(){
     clearTurnTimer();
-    if(!timerToggle.checked) return; // OFFのときは計測しない(無制限)
+    if(!timerToggle.checked || !requiredKana) return; // OFF、または最初の自由な一手は計測しない
     turnRemaining = TURN_TIME_LIMIT;
-    turnInterval = setInterval(() => {
-      turnRemaining--;
-      if(turnRemaining <= 0){
-        clearInterval(turnInterval); turnInterval = null;
-        timerFill.style.width = '0%';
-        timerLabel.textContent = '0秒';
-        handleTimeout();
-        return;
-      }
-      const pct = Math.max(0, (turnRemaining / TURN_TIME_LIMIT) * 100);
-      timerFill.style.width = pct + '%';
-      timerLabel.textContent = turnRemaining + '秒';
-      const urgent = turnRemaining <= 10;
-      timerFill.classList.toggle('urgent', urgent);
-      timerLabel.classList.toggle('urgent', urgent);
-    }, 1000);
+    turnInterval = setInterval(tickTurnTimer, 1000);
+  }
+  // 送信中の一瞬だけ計測を止める(残り時間はそのまま保持する)。
+  function pauseTurnTimer(){
+    if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
+  }
+  // 「読みが特定できません」等、その場で弾かれた無効な入力の後に使う。
+  // 新しい手番ではないので、残り時間をTURN_TIME_LIMITに戻さずそこから再開する。
+  function resumeTurnTimer(){
+    if(!timerToggle.checked || !requiredKana || turnInterval) return;
+    turnInterval = setInterval(tickTurnTimer, 1000);
   }
 
   // ---------------- UI ヘルパー ----------------
@@ -302,15 +314,12 @@ import { parseTSV } from './tsv.js';
     return weightedPick(nearBest);
   }
 
+  // 持ち時間の制御はここでは行わない(呼び出し側で意図に応じて
+  // startTurnTimer/pauseTurnTimer/resumeTurnTimer/clearTurnTimerを使い分ける)。
   function setBusy(v){
     busy = v;
     inputEl.disabled = v || gameOver;
     submitBtn.disabled = v || gameOver;
-    // あなたの手番(=busyでもgameOverでもない)のときだけ持ち時間を計測する。
-    // ただし対局開始直後の最初の一手(requiredKanaがまだ無い、自由な一手)は
-    // 対局が実質始まっていない状態なので、時間切れの対象にはしない。
-    if(v || gameOver || !requiredKana) clearTurnTimer();
-    else startTurnTimer();
   }
 
   // 制限時間(強さに関わらず一律 TURN_TIME_LIMIT 秒)以内に入力できなかった場合の即負け。
@@ -334,6 +343,7 @@ import { parseTSV } from './tsv.js';
     if(!val) return;
     inputEl.value = '';
     setBusy(true);
+    pauseTurnTimer(); // 判定中は一時停止するだけで、残り時間はリセットしない
     renderThinking('user');
     await new Promise(r => setTimeout(r, 200));
     removeThinking();
@@ -341,16 +351,16 @@ import { parseTSV } from './tsv.js';
     const resolved = resolveUserWord(val);
     if(!resolved){
       renderCard({word: val, invalid:true, reason:'読みが特定できません。ひらがな/カタカナで入力してください', by:'user'});
-      setBusy(false); return;
+      setBusy(false); resumeTurnTimer(); return;
     }
     if(requiredKana && !acceptableStartKana(requiredKana).includes(startKana(resolved.reading))){
       const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
       renderCard({word: resolved.word, invalid:true, reason: opts+'から始まっていません', by:'user'});
-      setBusy(false); return;
+      setBusy(false); resumeTurnTimer(); return;
     }
     if(usedReadings.has(resolved.reading)){
       renderCard({word: resolved.word, invalid:true, reason:'その言葉はすでに使われています', by:'user'});
-      setBusy(false); return;
+      setBusy(false); resumeTurnTimer(); return;
     }
 
     usedReadings.add(resolved.reading);
@@ -362,7 +372,7 @@ import { parseTSV } from './tsv.js';
     if(ending.isN){
       gameOver = true; updateMedallion();
       renderGameOver('ai', 'あなたの言葉の読みが「ん」で終わりました。');
-      setBusy(true); return;
+      setBusy(true); clearTurnTimer(); return;
     }
     requiredKana = ending.kana;
     updateMedallion();
@@ -375,7 +385,7 @@ import { parseTSV } from './tsv.js';
     if(!move){
       const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
       renderGameOver('user', '辞書番の持ち駒('+opts+'から始まる言葉)が尽きました。');
-      gameOver = true; updateMedallion(); setBusy(true); return;
+      gameOver = true; updateMedallion(); setBusy(true); clearTurnTimer(); return;
     }
     usedReadings.add(move.e.r);
     score.ai++; updateScore();
@@ -385,11 +395,12 @@ import { parseTSV } from './tsv.js';
     if(move.isN){
       gameOver = true; updateMedallion();
       renderGameOver('user', '辞書番が読みが「ん」で終わる言葉を選ばざるを得ませんでした。');
-      setBusy(true); return;
+      setBusy(true); clearTurnTimer(); return;
     }
     requiredKana = move.end.kana;
     updateMedallion();
     setBusy(false);
+    startTurnTimer(); // ここからがあなたの新しい手番なので、持ち時間を60秒に戻す
     inputEl.focus();
   }
 
@@ -398,6 +409,7 @@ import { parseTSV } from './tsv.js';
     updateScore(); updateMedallion();
     chainEl.innerHTML = '<div class="empty-hint" id="emptyHint"><div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。</div>';
     setBusy(false);
+    clearTurnTimer(); // 最初の自由な一手に戻るので、進行中だった持ち時間は止める
     inputEl.focus();
   }
 
