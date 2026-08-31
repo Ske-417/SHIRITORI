@@ -739,15 +739,21 @@ async function enrichPersonDescriptions(entries){
 
 // JMnedictの駅名/組織名/企業名/作品名/製品名は種別ラベルのみで説明文(d)が無いため、
 // Wikidataで「日本語ラベルが表記(entry.w)と完全一致し、かつ指定クラスのインスタンス
-// (P31/P279*で指定QIDのいずれかに到達する)である項目」を探して日本語の説明文を補う。
-// enrichPersonDescriptionsと同様、種別が分かっているのでクラスのホワイトリストで
-// 絞り込め、同名の無関係な項目に誤ってヒットすることはほぼ無い。
-async function enrichByWikidataClass(entries, classQids, label){
+// である項目」を探して日本語の説明文を補う。enrichPersonDescriptionsと同様、種別が
+// 分かっているのでクラスのホワイトリストで絞り込め、同名の無関係な項目に誤って
+// ヒットすることはほぼ無い。
+// direct=false(既定)はP31/P279*で指定QIDのいずれかに到達するかを見る(祖先クラスが
+// 具体的で件数も少ない駅・組織・企業向け)。direct=trueはP31が指定QIDのいずれかに
+// 直接一致するかだけを見る(「作品」「製品」のような抽象度の高いクラスはP279*の
+// 再帰探索がWikidata側で重く、504タイムアウトを頻発させることを確認したため、
+// 代わりに具体的な下位クラスをQIDで直接列挙する)。
+async function enrichByWikidataClass(entries, classQids, label, direct = false){
   const targets = entries.filter(e => !e.d);
   if(targets.length === 0) return;
   console.log(`Wikidataとの表記一致で${label}の説明文を補完中: 対象${targets.length}語(数分かかることがあります)`);
   const CHUNK = 200;
   const classValues = classQids.map(q => `wd:${q}`).join(' ');
+  const classPath = direct ? 'wdt:P31' : 'wdt:P31/wdt:P279*';
   let filled = 0;
   for(let i = 0; i < targets.length; i += CHUNK){
     const chunk = targets.slice(i, i + CHUNK);
@@ -755,7 +761,7 @@ async function enrichByWikidataClass(entries, classQids, label){
     const query = `SELECT ?label ?desc WHERE {
       VALUES ?label { ${values} }
       ?item rdfs:label ?label .
-      ?item wdt:P31/wdt:P279* ?class . VALUES ?class { ${classValues} }
+      ?item ${classPath} ?class . VALUES ?class { ${classValues} }
       ?item schema:description ?desc . FILTER(LANG(?desc)='ja')
     }`;
     try{
@@ -816,8 +822,16 @@ async function main(){
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '駅名'), ['Q55488'], '駅名');
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '組織名'), ['Q43229'], '組織名');
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '企業名'), ['Q4830453', 'Q783794'], '企業名');
-  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), ['Q386724'], '作品名');
-  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '製品名'), ['Q2424752'], '製品名');
+  // 「作品」「製品」はWikidata上ほぼ全ての物事を包含する抽象クラスで、P279*による
+  // 祖先探索がタイムアウトしやすいため、直接インスタンスとして使われることの多い
+  // 具体的な下位クラスを列挙し、P31の直接一致だけで判定する(direct=true)。
+  const WORK_TYPE_QIDS = [
+    'Q11424', 'Q5398426', 'Q7889', 'Q482994', 'Q134556', 'Q7366',
+    'Q571', 'Q8261', 'Q1004', 'Q853520', 'Q49084', 'Q220577',
+  ];
+  const PRODUCT_TYPE_QIDS = ['Q2424752', 'Q1183543', 'Q39546', 'Q28877', 'Q11019'];
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), WORK_TYPE_QIDS, '作品名', true);
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '製品名'), PRODUCT_TYPE_QIDS, '製品名', true);
 
   const out = [
     ...nouns,
