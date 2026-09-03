@@ -495,6 +495,16 @@ const WIKIDATA_JAPAN_PLACE_MIN_SITELINKS = 15;
 // 使わず、JMnedict側で既に読み付きで抽出済みの地名エントリのうち「この漢字表記に
 // 一致するもの」を tier1(著名優先)としてマークするための照合キー集合として使う。
 // 戻り値は「表記(漢字) -> Wikidataの日本語説明文(無ければundefined)」のMap。
+// 都道府県・主要都市に加え、山・川・湖・島も同じ「表記の照合キー」方式で対象にする。
+// これらは市区町村ほどsitelinksが多くない(=広く知られていても言語版の少ない
+// ローカルな地形として登録されがち)ため、足切りをやや緩めている。
+const WIKIDATA_JAPAN_GEO_MIN_SITELINKS = 8;
+const WIKIDATA_JAPAN_GEO_CLASSES = [
+  { qid: 'Q8502', label: '山' },
+  { qid: 'Q4022', label: '川' },
+  { qid: 'Q23397', label: '湖' },
+  { qid: 'Q23442', label: '島' },
+];
 async function fetchFamousJapanPlaceNames(){
   const prefectures = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
     ?item wdt:P31 wd:Q50337 ; wikibase:sitelinks ?sitelinks .
@@ -506,7 +516,20 @@ async function fetchFamousJapanPlaceNames(){
     FILTER(?sitelinks >= ${WIKIDATA_JAPAN_PLACE_MIN_SITELINKS})
     ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
   } LIMIT ${limit} OFFSET ${offset}`);
-  const rows = [...prefectures, ...cities];
+  let rows = [...prefectures, ...cities];
+  for(const geo of WIKIDATA_JAPAN_GEO_CLASSES){
+    try{
+      const geoRows = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
+        ?item wdt:P17 wd:Q17 ; wdt:P31/wdt:P279* wd:${geo.qid} ; wikibase:sitelinks ?sitelinks .
+        FILTER(?sitelinks >= ${WIKIDATA_JAPAN_GEO_MIN_SITELINKS})
+        ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel)='ja')
+      } LIMIT ${limit} OFFSET ${offset}`);
+      console.log(`  ${geo.label}: ${geoRows.length}件`);
+      rows.push(...geoRows);
+    }catch(err){
+      console.warn(`  ${geo.label}の取得に失敗しました: ${err.message} — スキップします`);
+    }
+  }
   const qids = rows.map(row => row.item.value.split('/').pop());
   const descMap = await fetchWikidataDescriptions(qids);
   const names = new Map();
@@ -514,7 +537,7 @@ async function fetchFamousJapanPlaceNames(){
     const qid = row.item.value.split('/').pop();
     names.set(row.itemLabel.value, descMap.get(qid));
   }
-  console.log(`Wikidata(日本の著名な地名の表記): 都道府県${prefectures.length}件 + 都市${cities.length}件 = ${names.size}件(重複除去後、説明文あり${descMap.size}件)`);
+  console.log(`Wikidata(日本の著名な地名の表記): 都道府県${prefectures.length}件 + 都市${cities.length}件 + 山川湖島 = ${names.size}件(重複除去後、説明文あり${descMap.size}件)`);
   return names;
 }
 
@@ -828,6 +851,8 @@ async function main(){
   const WORK_TYPE_QIDS = [
     'Q11424', 'Q5398426', 'Q7889', 'Q482994', 'Q134556', 'Q7366',
     'Q571', 'Q8261', 'Q1004', 'Q853520', 'Q49084', 'Q220577',
+    'Q25379', 'Q1344', 'Q2743', 'Q41298', 'Q11032', 'Q3305213',
+    'Q860861', 'Q131436', 'Q1150772', 'Q1555508', 'Q149537',
   ];
   const PRODUCT_TYPE_QIDS = ['Q2424752', 'Q1183543', 'Q39546', 'Q28877', 'Q11019'];
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), WORK_TYPE_QIDS, '作品名', true);
