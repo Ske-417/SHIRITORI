@@ -47,6 +47,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
+import { Readable } from 'node:stream';
+import readline from 'node:readline';
 import AdmZip from 'adm-zip';
 import { stringifyTSV } from '../tsv.js';
 
@@ -56,6 +59,105 @@ const REPO = 'scriptin/jmdict-simplified';
 
 // しりとりの読みとして許容する文字種(純粋なひらがな+長音のみ)
 const KANA_ONLY = /^[ぁ-ゖー]+$/;
+
+// ---------------------------------------------------------------------------
+// Wiktionary(日本語版)由来の日本語解説文の補完
+//
+// JMdict/JMnedict由来の語には英語glossしか無く、これまではWikidataとの表記一致で
+// 日本語の説明文(d)を補ってきたが、Wikidataは「実世界の物事」のデータベースであり、
+// 一般語・和語動詞・ことわざのような「言葉そのものの意味」を持たないことが多い
+// (ことわざは特に、Wikidata側にほぼ項目が無い)。
+// kaikki.org (https://kaikki.org/) は Wiktionary の各言語版を構造化データとして
+// 抽出・公開しており(wiktextractプロジェクトによる、元データはWiktionary同様
+// CC BY-SA 3.0/GFDL)、日本語版Wiktionary(ja.wiktionary.org)の抽出データを
+// 追加の情報源として使う。ことわざ・和語動詞・基本語彙で特に効果が大きい。
+const WIKTIONARY_URL = 'https://kaikki.org/dictionary/downloads/ja/ja-extract.jsonl.gz';
+
+// 語義が「〜の漢字表記」のような、別の見出し語への言い換えでしかないかどうか。
+// 日本語版Wiktionaryは和語動詞などの本体をひらがな見出し(例: 「はしる」)に置き、
+// 漢字表記側(例: 「走る」)は言い換えだけの薄い項目にしていることが多いため、
+// このような語義は内容が無いものとして無視する。
+function isFormOfSense(sense){
+  return !!(sense.form_of && sense.form_of.length);
+}
+
+// 「いぬ。」のような、見出し語自身の読みをそのまま書いただけの中身の薄い語義を除外する。
+const TRIVIAL_GLOSS_MAX_LEN = 4;
+function isTrivialGloss(gloss){
+  const stripped = gloss.replace(/[。、\s]/g, '');
+  return stripped.length <= TRIVIAL_GLOSS_MAX_LEN && KANA_ONLY.test(stripped);
+}
+
+// 1つの見出し語エントリ(1行分のJSON)の senses から、画面表示に使える
+// 最初の語義を1つ選ぶ。長すぎる語義は最初の句点までに切り詰める。
+// 「（とうきょう）日本の事実上の首都。」のように、見出し語の読みをそのまま
+// 括弧書きした前置きが付くことがあるため、表示上冗長なこの部分は取り除く。
+const LEADING_KANA_PAREN = /^（[ぁ-ゖー]+）/;
+function pickWiktionaryGloss(senses){
+  for(const sense of senses || []){
+    if(isFormOfSense(sense)) continue;
+    let gloss = (sense.glosses || [])[0];
+    if(!gloss) continue;
+    gloss = gloss.replace(LEADING_KANA_PAREN, '');
+    if(isTrivialGloss(gloss)) continue;
+    const period = gloss.indexOf('。');
+    if(period > 0 && period < 80) return gloss.slice(0, period + 1);
+    return gloss.slice(0, 80);
+  }
+  return null;
+}
+
+// kaikki.orgからWiktionary日本語版の抽出データ(JSONL、gzip圧縮)をダウンロードし、
+// ストリームのまま(全体をメモリに載せずに)1行ずつ読みながら、
+// 「見出し語(表記または読み) -> 日本語の説明文」のMapを作る。
+// 圧縮61MB・展開後400MB超だが、保持するのは選び出した説明文の文字列だけなので
+// メモリ使用量は小さい。取得に失敗した場合は空のMapを返し、Wiktionaryによる
+// 補完だけをスキップする(Wikidataベースの補完は従来通り動く)。
+async function fetchWiktionaryDefinitions(){
+  console.log('Wiktionary(日本語版)の辞書データをダウンロード中(圧縮61MB、展開しながら処理するため数分かかることがあります)…');
+  const byWord = new Map();
+  try{
+    const res = await fetch(WIKTIONARY_URL);
+    if(!res.ok) throw new Error(`Wiktionaryデータのダウンロードに失敗: ${res.status}`);
+    const gunzip = zlib.createGunzip();
+    Readable.fromWeb(res.body).pipe(gunzip);
+    const rl = readline.createInterface({ input: gunzip, crlfDelay: Infinity });
+    let lines = 0, jaLines = 0;
+    for await (const line of rl){
+      lines++;
+      if(!line) continue;
+      let obj;
+      try{ obj = JSON.parse(line); }catch(e){ continue; }
+      if(obj.lang_code !== 'ja') continue;
+      jaLines++;
+      if(byWord.has(obj.word)) continue; // 同じ見出し語は先に見つかった語義を優先する
+      const gloss = pickWiktionaryGloss(obj.senses);
+      if(gloss) byWord.set(obj.word, gloss);
+    }
+    console.log(`  Wiktionary読み込み完了: 全${lines}行中、日本語エントリ${jaLines}件、説明文を抽出できた見出し語${byWord.size}件`);
+  }catch(err){
+    console.warn(`  Wiktionaryデータの取得に失敗しました(このカテゴリはスキップします): ${err.message}`);
+  }
+  return byWord;
+}
+
+// 表記(w)より先に読み(r)で引く: 上記の通り、和語動詞などは読みの見出し語の方が
+// 内容の濃い語義を持っていることが多いため。どちらでも見つからなければnull。
+function lookupWiktionaryGloss(byWord, e){
+  return byWord.get(e.r) || byWord.get(e.w) || null;
+}
+
+// dがまだ無いentriesに対して、Wiktionaryとの表記/読み一致で説明文を補う。
+// ネットワーク通信を伴わない(byWordは事前に1回だけ取得済み)ため高速。
+function enrichWithWiktionary(entries, byWord, label){
+  let filled = 0;
+  for(const e of entries){
+    if(e.d) continue;
+    const gloss = lookupWiktionaryGloss(byWord, e);
+    if(gloss){ e.d = gloss; filled++; }
+  }
+  console.log(`  → ${label}: Wiktionaryから${filled}語に説明文を追加できました`);
+}
 
 // JMdict の partOfSpeech は "n" を含むだけの部分一致で判定すると
 // interjection(int)や Noh(noh)、Nagano-ben(nab)まで誤って拾ってしまうため、
@@ -815,10 +917,11 @@ async function main(){
     getAsset(/^jmnedict-all-.*\.json\.zip$/),
   ]);
 
-  const [commonData, fullData, neData] = await Promise.all([
+  const [commonData, fullData, neData, wiktionary] = await Promise.all([
     downloadJson(commonAsset),
     downloadJson(fullAsset),
     downloadJson(neAsset),
+    fetchWiktionaryDefinitions(),
   ]);
 
   // Wikidataは神話・架空の存在/著名人について日本語の説明文を持つことが多く、
@@ -829,6 +932,13 @@ async function main(){
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
 
+  // まずWiktionary(ネットワーク通信を伴わない、事前取得済みのMap参照のみ)で
+  // 日本語の説明文を補い、それでも埋まらなかった分だけWikidataとの表記一致で補完する。
+  // ことわざ・和語動詞・基本語彙はWiktionaryの方が的確な語義を持つことが多い。
+  enrichWithWiktionary(nouns, wiktionary, '一般名詞');
+  enrichWithWiktionary(proverbs, wiktionary, 'ことわざ・故事成語');
+  enrichWithWiktionary(fieldTerms, wiktionary, '専門用語');
+
   // JMdict由来で英語glossしか無い一般名詞・ことわざ/専門用語に、Wikidataとの表記一致で
   // 日本語の簡単な説明文(d)を補完する(例: りんご→「セイヨウリンゴの果実」)。
   // 件数が多いため時間がかかる。
@@ -837,6 +947,8 @@ async function main(){
   await enrichWithWikidataDescriptions(fieldTerms, '専門用語');
 
   const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
+  // 固有名詞にもWiktionaryを先に試す(著名な地名・人名・作品名等は掲載されていることがある)。
+  enrichWithWiktionary(properNouns.out, wiktionary, '固有名詞');
   // JMnedict由来の著名人は英語の伝記文しか無いため、Wikidataとの表記一致(かつ人間限定)で
   // 日本語の説明文(d)を補う。見つかった分だけ「誰なのか」が表示されるようになる。
   await enrichPersonDescriptions(properNouns.personEntries);

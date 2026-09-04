@@ -131,15 +131,28 @@ npm run fetch-words
   例: アインシュタイン→「ドイツ生まれの理論物理学者」)。見つからなかった語は
   意味欄が種別ラベル(例:「人名」)のみになります。
 
-### 一般名詞・ことわざ/専門用語への日本語解説(d)の補完
+### 日本語解説(d)の補完: Wiktionary → Wikidata の2段階
 
-JMdict由来の意味(gloss)は英語のみのため、一般名詞・ことわざ/故事成語・専門用語は
-Wikidataで表記が完全一致する項目を探し、見つかった日本語の説明文を `d` として追加しています
-(`enrichWithWikidataDescriptions`)。表記(`w`)に加えて、読み(`r`)をカタカナに変換した
-形でも検索します。例えば「りんご」はJMdict上「林檎」という漢字表記で保存されていますが、
-Wikidataでは果物の項目が「リンゴ」というカタカナのラベルで登録されていることが多く、
-表記だけの一致では拾えません。読みのカタカナ変換も候補に加えることで、こうした表記の
-食い違いを拾えるようにしています。
+JMdict由来の意味(gloss)は英語のみのため、日本語の説明文(d)を2つの情報源で補完しています。
+
+1. **Wiktionary(日本語版)**(`enrichWithWiktionary`) … まずこちらを試す。
+   [kaikki.org](https://kaikki.org/) が公開している、[wiktextract](https://github.com/tatuylonen/wiktextract)
+   によるWiktionary日本語版(ja.wiktionary.org)の構造化抽出データ(`ja-extract.jsonl.gz`、
+   元データ・抽出データともCC BY-SA 3.0/GFDL)を使う。Wikidataは「実世界の物事」の
+   データベースであるのに対し、Wiktionaryは「言葉そのものの意味」を記述した辞書であるため、
+   一般語・和語動詞・ことわざで特に精度が高い(ことわざはWikidataにはほぼ存在しない)。
+   日本語版Wiktionaryは和語動詞などの本体をひらがな見出し(例:「はしる」)に置き、
+   漢字表記側(例:「走る」)は「〜の漢字表記」という言い換えだけの薄い項目にしていることが
+   多いため、表記(`w`)より先に読み(`r`)で引く。見出し語自身の読みをそのまま書いただけの
+   中身の薄い語義(例:「いぬ」の第一義が単に「いぬ。」)は除外し、言い換えのみの語義
+   (`form_of`が付いたもの)もスキップする。ダウンロードは1回だけ(圧縮61MB)で、以降は
+   メモリ上のMap参照のみなのでネットワーク通信を伴わず高速。
+2. **Wikidata**(`enrichWithWikidataDescriptions`) … Wiktionaryで見つからなかった語だけを
+   対象に、表記が完全一致する項目を探して日本語の説明文を補う。表記(`w`)に加えて、
+   読み(`r`)をカタカナに変換した形でも検索する。例えば「りんご」はJMdict上「林檎」という
+   漢字表記で保存されているが、Wikidataでは果物の項目が「リンゴ」というカタカナの
+   ラベルで登録されていることが多く、表記だけの一致では拾えない。読みのカタカナ変換も
+   候補に加えることで、こうした表記の食い違いを拾えるようにしている。
 
 表記が同じでも別の意味の項目(同名の作品・人物・地名など)にヒットすることがあるため、
 あからさまに無関係と分かるもの(人間・映画・アルバム・曖昧さ回避ページ等の型、および
@@ -192,3 +205,9 @@ Wikidataでは果物の項目が「リンゴ」というカタカナのラベル
   Wikidataの構造化データは [CC0](https://creativecommons.org/publicdomain/zero/1.0/)
   (パブリックドメイン相当)で提供されており、各語の意味欄末尾の `[Wikidata:Q番号]` から
   個別の出典(`https://www.wikidata.org/wiki/Q番号`)を確認できます。
+- 日本語の解説文(`d`)の多くは [Wiktionary(日本語版)](https://ja.wiktionary.org/) 由来です
+  ([kaikki.org](https://kaikki.org/) が公開する [wiktextract](https://github.com/tatuylonen/wiktextract)
+  の構造化抽出データを利用)。Wiktionaryの内容は
+  [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) および
+  [GFDL](https://www.gnu.org/licenses/fdl-1.3.html) のデュアルライセンスで提供されており、
+  再配布時はライセンス条件(表示・継承)に従ってください。
