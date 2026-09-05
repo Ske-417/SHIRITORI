@@ -606,6 +606,15 @@ const WIKIDATA_JAPAN_GEO_CLASSES = [
   { qid: 'Q4022', label: '川' },
   { qid: 'Q23397', label: '湖' },
   { qid: 'Q23442', label: '島' },
+  { qid: 'Q845945', label: '神社' },
+  { qid: 'Q5393308', label: '寺' },
+  { qid: 'Q92026', label: '城' },
+  { qid: 'Q655311', label: '温泉' },
+  { qid: 'Q22698', label: '公園' },
+  { qid: 'Q12280', label: '橋' },
+  { qid: 'Q34763', label: '半島' },
+  { qid: 'Q185113', label: '岬' },
+  { qid: 'Q133056', label: '峠' },
 ];
 async function fetchFamousJapanPlaceNames(){
   const prefectures = await sparqlPaginated((limit, offset) => `SELECT ?item ?itemLabel WHERE {
