@@ -881,11 +881,11 @@ async function enrichPersonDescriptions(entries){
 // 直接一致するかだけを見る(「作品」「製品」のような抽象度の高いクラスはP279*の
 // 再帰探索がWikidata側で重く、504タイムアウトを頻発させることを確認したため、
 // 代わりに具体的な下位クラスをQIDで直接列挙する)。
-async function enrichByWikidataClass(entries, classQids, label, direct = false){
+async function enrichByWikidataClass(entries, classQids, label, direct = false, chunkSize = 200){
   const targets = entries.filter(e => !e.d);
   if(targets.length === 0) return;
   console.log(`Wikidataとの表記一致で${label}の説明文を補完中: 対象${targets.length}語(数分かかることがあります)`);
-  const CHUNK = 200;
+  const CHUNK = chunkSize;
   const classValues = classQids.map(q => `wd:${q}`).join(' ');
   const classPath = direct ? 'wdt:P31' : 'wdt:P31/wdt:P279*';
   let filled = 0;
@@ -978,6 +978,23 @@ async function main(){
   const PRODUCT_TYPE_QIDS = ['Q2424752', 'Q1183543', 'Q39546', 'Q28877', 'Q11019'];
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), WORK_TYPE_QIDS, '作品名', true);
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '製品名'), PRODUCT_TYPE_QIDS, '製品名', true);
+
+  // 地名(150,000語)は、fetchFamousJapanPlaceNamesによる「著名な地名」照合だけでは
+  // ごく一部(数千件)しかdが埋まらない。都道府県・市区町村より下位の、JMnedictの
+  // 地名エントリの大半を占める町丁目・大字・字レベルの行政区画にもWikidata上の
+  // クラスが存在する(ōaza/koaza/aza/chōme等)ため、著名度(tier1)とは切り離して、
+  // 直接インスタンスとして該当するものにはdだけを補う(t=1にはしない)。
+  // 「地名」の抽象的な祖先クラス(Q56061 行政区画等)でのP279*探索は、他の
+  // 抽象クラス同様にWikidata側でタイムアウトすることを確認済みのため、
+  // 具体的な下位クラスをQIDで直接列挙し、P31の直接一致だけで判定する。
+  const JAPAN_PLACE_TYPE_QIDS = [
+    'Q515', 'Q1059478', 'Q4174776', 'Q137773',
+    'Q424857', 'Q5327509', 'Q66752884', 'Q28754498',
+    'Q5327369', 'Q65948724',
+  ];
+  // 対象語数が非常に多い(15万語規模)ため、direct(P31直接一致、軽いクエリ)であることを
+  // 活かしてチャンクサイズを大きくし、往復回数を減らす。
+  await enrichByWikidataClass(properNouns.out.filter(e => e.m === '地名'), JAPAN_PLACE_TYPE_QIDS, '地名(住所区分)', true, 600);
 
   const out = [
     ...nouns,
