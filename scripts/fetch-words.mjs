@@ -85,7 +85,11 @@ function isFormOfSense(sense){
 const TRIVIAL_GLOSS_MAX_LEN = 4;
 function isTrivialGloss(gloss){
   const stripped = gloss.replace(/[。、\s]/g, '');
-  return stripped.length <= TRIVIAL_GLOSS_MAX_LEN && KANA_ONLY.test(stripped);
+  if(stripped.length <= TRIVIAL_GLOSS_MAX_LEN && KANA_ONLY.test(stripped)) return true;
+  // 「〜の異表記。」「〜の別表記。」のような、別の見出し語への言い換えのみで
+  // それ自体は語義の説明になっていないものも同様に除外する。
+  if(/の(異|別)表記/.test(gloss)) return true;
+  return false;
 }
 
 // 1つの見出し語エントリ(1行分のJSON)の senses から、画面表示に使える
@@ -141,19 +145,25 @@ async function fetchWiktionaryDefinitions(){
   return byWord;
 }
 
-// 表記(w)より先に読み(r)で引く: 上記の通り、和語動詞などは読みの見出し語の方が
-// 内容の濃い語義を持っていることが多いため。どちらでも見つからなければnull。
-function lookupWiktionaryGloss(byWord, e){
-  return byWord.get(e.r) || byWord.get(e.w) || null;
+// 一般語・和語動詞は表記(w)より先に読み(r)で引く: 上記の通り、和語動詞などは
+// 読みの見出し語の方が内容の濃い語義を持っていることが多いため。
+// 固有名詞(地名・人名など)は逆に表記(w)を優先する: 固有名詞の読みは短い
+// ひらがな列になりがちで、内容と無関係な一般語・俗語の見出し語(例:
+// 地名种別の「ウィル」が、読み「うぃる」経由でSNS用語「うぃる(will)」の
+// 語義を拾ってしまう)に誤って一致する事故が起きやすいため。
+// どちらでも見つからなければnull。
+function lookupWiktionaryGloss(byWord, e, preferSurfaceForm = false){
+  const keys = preferSurfaceForm ? [e.w, e.r] : [e.r, e.w];
+  return byWord.get(keys[0]) || byWord.get(keys[1]) || null;
 }
 
 // dがまだ無いentriesに対して、Wiktionaryとの表記/読み一致で説明文を補う。
 // ネットワーク通信を伴わない(byWordは事前に1回だけ取得済み)ため高速。
-function enrichWithWiktionary(entries, byWord, label){
+function enrichWithWiktionary(entries, byWord, label, preferSurfaceForm = false){
   let filled = 0;
   for(const e of entries){
     if(e.d) continue;
-    const gloss = lookupWiktionaryGloss(byWord, e);
+    const gloss = lookupWiktionaryGloss(byWord, e, preferSurfaceForm);
     if(gloss){ e.d = gloss; filled++; }
   }
   console.log(`  → ${label}: Wiktionaryから${filled}語に説明文を追加できました`);
@@ -957,7 +967,7 @@ async function main(){
 
   const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
   // 固有名詞にもWiktionaryを先に試す(著名な地名・人名・作品名等は掲載されていることがある)。
-  enrichWithWiktionary(properNouns.out, wiktionary, '固有名詞');
+  enrichWithWiktionary(properNouns.out, wiktionary, '固有名詞', true);
   // JMnedict由来の著名人は英語の伝記文しか無いため、Wikidataとの表記一致(かつ人間限定)で
   // 日本語の説明文(d)を補う。見つかった分だけ「誰なのか」が表示されるようになる。
   await enrichPersonDescriptions(properNouns.personEntries);
