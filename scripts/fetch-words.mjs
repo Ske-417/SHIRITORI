@@ -147,14 +147,16 @@ async function fetchWiktionaryDefinitions(){
 
 // 一般語・和語動詞は表記(w)より先に読み(r)で引く: 上記の通り、和語動詞などは
 // 読みの見出し語の方が内容の濃い語義を持っていることが多いため。
-// 固有名詞(地名・人名など)は逆に表記(w)を優先する: 固有名詞の読みは短い
-// ひらがな列になりがちで、内容と無関係な一般語・俗語の見出し語(例:
-// 地名种別の「ウィル」が、読み「うぃる」経由でSNS用語「うぃる(will)」の
-// 語義を拾ってしまう)に誤って一致する事故が起きやすいため。
-// どちらでも見つからなければnull。
+// 固有名詞(地名・人名など)は表記(w)のみで引き、読み(r)へのフォールバックは
+// しない: 固有名詞の読みは短いひらがな列になりがちで、内容と無関係な
+// 一般語・俗語の見出し語に誤って一致する事故が起きやすい(例: 地名種別の
+// 「ウィル」が、読み「うぃる」経由でSNS用語「うぃる(will、SNS投稿の末尾に
+// 付ける俗語)」の語義を拾ってしまい、地名なのに文法・俗語の説明が付く、
+// という実例が確認された)。表記自体に載っていない語は、無理にrへ
+// フォールバックせず「見つからない」扱いにする方が安全。
 function lookupWiktionaryGloss(byWord, e, preferSurfaceForm = false){
-  const keys = preferSurfaceForm ? [e.w, e.r] : [e.r, e.w];
-  return byWord.get(keys[0]) || byWord.get(keys[1]) || null;
+  if(preferSurfaceForm) return byWord.get(e.w) || null;
+  return byWord.get(e.r) || byWord.get(e.w) || null;
 }
 
 // dがまだ無いentriesに対して、Wiktionaryとの表記/読み一致で説明文を補う。
