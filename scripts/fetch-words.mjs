@@ -931,7 +931,14 @@ async function enrichByWikidataClass(entries, classQids, label, direct = false, 
       const descByLabel = new Map();
       for(const row of rows){
         const l = row.label.value, d = row.desc.value;
-        if(!isUsableWikidataDesc(d)) continue;
+        // isUsableWikidataDesc(NOISE_DESC_PATTERNS)はここでは使わない: あれは
+        // 「表記が同じだけの無関係な項目」を弾くためのフィルタで、小説/映画/
+        // アニメ/年号のような記述を"作品らしいノイズ"として除外する。しかし
+        // ここは既にクラス(work/product/station/organization/company等)を
+        // ホワイトリストで絞り込み済みで、「作品らしい」記述はまさに正しい
+        // 説明そのものなので、同じフィルタを適用すると正しい説明文まで誤って
+        // 除外してしまう(実例: アルプスの少女ハイジ→「1974年に放送された
+        // 日本のテレビアニメ」が\d{4}年パターンで弾かれていた)。
         if(!descByLabel.has(l)) descByLabel.set(l, d);
       }
       for(const e of chunk){
