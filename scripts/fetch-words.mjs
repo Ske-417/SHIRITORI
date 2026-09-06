@@ -249,12 +249,28 @@ function toKatakana(str){
   return str.replace(/[ぁ-ん]/g, ch => String.fromCharCode(ch.charCodeAt(0) + 0x60));
 }
 
+// GitHub API(api.github.com)は未認証だと60回/時間までしかリクエストできない。
+// アセットごとに毎回リリース情報を取りに行くと(3種のアセット分)それだけで
+// 3回消費してしまい、開発中に何度も実行するとすぐ枯渇するため、リリース情報
+// 自体は1回だけ取得してキャッシュし、そこから全アセットを探す。
+// getAsset は main() から Promise.all で並行に3回呼ばれるため、値ではなく
+// Promise自体をキャッシュしないと、最初のfetchが完了する前に後続の呼び出しが
+// それぞれ別のリクエストを発行してしまう(結局3回消費する)ことに注意。
+let releaseCachePromise = null;
+function fetchLatestRelease(){
+  if(!releaseCachePromise){
+    releaseCachePromise = fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers: { 'User-Agent': 'shiritori-dojo-fetch-words' }
+    }).then(res => {
+      if(!res.ok) throw new Error(`GitHub API error: ${res.status}`);
+      return res.json();
+    });
+  }
+  return releaseCachePromise;
+}
+
 async function getAsset(nameTest){
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-    headers: { 'User-Agent': 'shiritori-dojo-fetch-words' }
-  });
-  if(!res.ok) throw new Error(`GitHub API error: ${res.status}`);
-  const data = await res.json();
+  const data = await fetchLatestRelease();
   const asset = data.assets.find(a => nameTest.test(a.name));
   if(!asset) throw new Error(`対応するアセットが見つかりませんでした(パターン: ${nameTest})`);
   return asset;
