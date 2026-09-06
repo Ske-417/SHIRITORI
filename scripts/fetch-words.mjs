@@ -1002,6 +1002,7 @@ async function main(){
     'Q571', 'Q8261', 'Q1004', 'Q853520', 'Q49084', 'Q220577',
     'Q25379', 'Q1344', 'Q2743', 'Q41298', 'Q11032', 'Q3305213',
     'Q860861', 'Q131436', 'Q1150772', 'Q1555508', 'Q149537',
+    'Q7725634', 'Q63952888', 'Q254554', 'Q506240', 'Q1259759',
   ];
   const PRODUCT_TYPE_QIDS = ['Q2424752', 'Q1183543', 'Q39546', 'Q28877', 'Q11019'];
   await enrichByWikidataClass(properNouns.out.filter(e => e.m === '作品名'), WORK_TYPE_QIDS, '作品名', true);
