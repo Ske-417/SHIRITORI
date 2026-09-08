@@ -117,48 +117,55 @@ function pickWiktionaryGloss(senses){
 // 圧縮61MB・展開後400MB超だが、保持するのは選び出した説明文の文字列だけなので
 // メモリ使用量は小さい。取得に失敗した場合は空のMapを返し、Wiktionaryによる
 // 補完だけをスキップする(Wikidataベースの補完は従来通り動く)。
-async function fetchWiktionaryDefinitions(){
+async function fetchWiktionaryDefinitions(retries = 2){
   console.log('Wiktionary(日本語版)の辞書データをダウンロード中(圧縮61MB、展開しながら処理するため数分かかることがあります)…');
-  const byWord = new Map();
-  try{
-    const res = await fetch(WIKTIONARY_URL);
-    if(!res.ok) throw new Error(`Wiktionaryデータのダウンロードに失敗: ${res.status}`);
-    const source = Readable.fromWeb(res.body);
-    const gunzip = zlib.createGunzip();
-    // .pipe()だけだと、ダウンロード元ストリーム(res.body)や展開ストリームが
-    // 途中でネットワークタイムアウト等により'error'を出したとき、それが
-    // try/catchで拾えず「Unhandled 'error' event」としてプロセスごと
-    // クラッシュすることを確認した(600MB超のファイルを数分かけてダウンロード
-    // する都合上、途中で切れる事故は珍しくない)。両方のストリームに明示的な
-    // エラーハンドラを付けてPromiseの却下に変換し、通常の読み込み完了と
-    // Promise.raceさせることで、エラー発生時もtry/catchで正しく捕捉できる
-    // ようにする。
-    const streamError = new Promise((_, reject) => {
-      source.on('error', reject);
-      gunzip.on('error', reject);
-    });
-    source.pipe(gunzip);
-    const rl = readline.createInterface({ input: gunzip, crlfDelay: Infinity });
-    let lines = 0, jaLines = 0;
-    const readLines = (async () => {
-      for await (const line of rl){
-        lines++;
-        if(!line) continue;
-        let obj;
-        try{ obj = JSON.parse(line); }catch(e){ continue; }
-        if(obj.lang_code !== 'ja') continue;
-        jaLines++;
-        if(byWord.has(obj.word)) continue; // 同じ見出し語は先に見つかった語義を優先する
-        const gloss = pickWiktionaryGloss(obj.senses);
-        if(gloss) byWord.set(obj.word, gloss);
+  for(let attempt = 0; ; attempt++){
+    const byWord = new Map();
+    try{
+      const res = await fetch(WIKTIONARY_URL);
+      if(!res.ok) throw new Error(`Wiktionaryデータのダウンロードに失敗: ${res.status}`);
+      const source = Readable.fromWeb(res.body);
+      const gunzip = zlib.createGunzip();
+      // .pipe()だけだと、ダウンロード元ストリーム(res.body)や展開ストリームが
+      // 途中でネットワークタイムアウト等により'error'を出したとき、それが
+      // try/catchで拾えず「Unhandled 'error' event」としてプロセスごと
+      // クラッシュすることを確認した(600MB超のファイルを数分かけてダウンロード
+      // する都合上、途中で切れる事故は珍しくない)。両方のストリームに明示的な
+      // エラーハンドラを付けてPromiseの却下に変換し、通常の読み込み完了と
+      // Promise.raceさせることで、エラー発生時もtry/catchで正しく捕捉できる
+      // ようにする。
+      const streamError = new Promise((_, reject) => {
+        source.on('error', reject);
+        gunzip.on('error', reject);
+      });
+      source.pipe(gunzip);
+      const rl = readline.createInterface({ input: gunzip, crlfDelay: Infinity });
+      let lines = 0, jaLines = 0;
+      const readLines = (async () => {
+        for await (const line of rl){
+          lines++;
+          if(!line) continue;
+          let obj;
+          try{ obj = JSON.parse(line); }catch(e){ continue; }
+          if(obj.lang_code !== 'ja') continue;
+          jaLines++;
+          if(byWord.has(obj.word)) continue; // 同じ見出し語は先に見つかった語義を優先する
+          const gloss = pickWiktionaryGloss(obj.senses);
+          if(gloss) byWord.set(obj.word, gloss);
+        }
+      })();
+      await Promise.race([readLines, streamError]);
+      console.log(`  Wiktionary読み込み完了: 全${lines}行中、日本語エントリ${jaLines}件、説明文を抽出できた見出し語${byWord.size}件`);
+      return byWord;
+    }catch(err){
+      if(attempt >= retries){
+        console.warn(`  Wiktionaryデータの取得に失敗しました(このカテゴリはスキップします): ${err.message}`);
+        return byWord; // 空のMap(呼び出し側はWiktionary補完だけをスキップして続行する)
       }
-    })();
-    await Promise.race([readLines, streamError]);
-    console.log(`  Wiktionary読み込み完了: 全${lines}行中、日本語エントリ${jaLines}件、説明文を抽出できた見出し語${byWord.size}件`);
-  }catch(err){
-    console.warn(`  Wiktionaryデータの取得に失敗しました(このカテゴリはスキップします): ${err.message}`);
+      console.warn(`  Wiktionaryデータの取得に失敗、リトライします(${attempt + 1}/${retries}): ${err.message}`);
+      await new Promise(r => setTimeout(r, 5000 * (attempt + 1)));
+    }
   }
-  return byWord;
 }
 
 // 一般語・和語動詞は表記(w)より先に読み(r)で引く: 上記の通り、和語動詞などは
@@ -292,14 +299,27 @@ async function getAsset(nameTest){
   return asset;
 }
 
-async function downloadJson(asset){
+// JMdict/JMnedictのzipは11〜13MBあり、ダウンロード中にネットワークが一時的に
+// 切れて"terminated"(ETIMEDOUT等)で失敗することがある(実際に複数回発生を
+// 確認した)。ここにはリトライが無かったため、その都度スクリプト全体を
+// 手動で再実行する必要があった。sparql()と同様のリトライを入れておく。
+async function downloadJson(asset, retries = 3){
   console.log(`ダウンロード: ${asset.name} (${(asset.size/1024/1024).toFixed(1)} MB)`);
-  const res = await fetch(asset.browser_download_url);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const zip = new AdmZip(buf);
-  const entry = zip.getEntries().find(e => e.entryName.endsWith('.json'));
-  if(!entry) throw new Error(`${asset.name} 内にjsonファイルが見つかりませんでした`);
-  return JSON.parse(zip.readAsText(entry));
+  for(let attempt = 0; ; attempt++){
+    try{
+      const res = await fetch(asset.browser_download_url);
+      if(!res.ok) throw new Error(`ダウンロード失敗: ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const zip = new AdmZip(buf);
+      const entry = zip.getEntries().find(e => e.entryName.endsWith('.json'));
+      if(!entry) throw new Error(`${asset.name} 内にjsonファイルが見つかりませんでした`);
+      return JSON.parse(zip.readAsText(entry));
+    }catch(err){
+      if(attempt >= retries) throw err;
+      console.warn(`  ${asset.name} のダウンロードに失敗、リトライします(${attempt + 1}/${retries}): ${err.message}`);
+      await new Promise(r => setTimeout(r, 5000 * (attempt + 1)));
+    }
+  }
 }
 
 // t(tier)は「有名度」の目印。1=著名(都道府県・主要都市・広く知られた人物など)を付けておくと、
