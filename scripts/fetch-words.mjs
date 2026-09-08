@@ -304,11 +304,11 @@ function addEntry(out, seenReadings, cap, { w, r, m, t, d }){
   return true;
 }
 
-function extractNouns(commonData, fullData, seenReadings){
+// 「よく使われる(common)」語をtier1(著名優先)として採用する。りんご・机の
+// ような誰でも知っている一般語なので、数万〜数十万語の専門用語・固有名詞に
+// 埋もれて出にくくならないよう優先的に選ばれるようにしている。
+function extractNouns(commonData, seenReadings){
   const out = [];
-  // まず「よく使われる(common)」語をtier1(著名優先)として採用する。
-  // りんご・机のような誰でも知っている一般語なので、数万〜数十万語の専門用語・
-  // 固有名詞に埋もれて出にくくならないよう優先的に選ばれるようにしている。
   for(const word of commonData.words){
     if(out.length >= CAPS.noun) break;
     const kanjiCommon = (word.kanji || []).find(k => k.common);
@@ -329,13 +329,22 @@ function extractNouns(commonData, fullData, seenReadings){
       t: 1,
     });
   }
-  const commonCount = out.length;
+  console.log(`一般名詞(よく使われる語): ${out.length}語`);
+  return out;
+}
 
-  // 一般名詞をさらに増やすため、フル版(jmdict-eng)から「よく使われる」フラグの
-  // 有無を問わず名詞系の語を追加で拾う。commonフラグが無い分、tierは付けない
-  // (=AIの手選びで最優先にはならないが、確実に手の候補には入る)。
+// 一般名詞をさらに増やすため、フル版(jmdict-eng)から「よく使われる」フラグの
+// 有無を問わず名詞系の語を追加で拾う。commonフラグが無い分、tierは付けない
+// (=AIの手選びで最優先にはならないが、確実に手の候補には入る)。
+// ことわざ・専門用語(いずれもfullDataから抽出、NOUN_POSを兼ねる語を含む)より
+// 後に呼ぶこと: 先に呼ぶと、それらの語の読みをここで(単なる「普通名詞」として)
+// 先取りしてしまい、ことわざ・専門用語側の抽出数が大きく減ってしまう
+// (実際に発生した不具合: ことわざが2,696語→1,249語、専門用語が28,568語→17,661語
+// まで減少した)。
+function extractExtraNouns(fullData, seenReadings, cap){
+  const out = [];
   for(const word of fullData.words){
-    if(out.length >= CAPS.noun) break;
+    if(out.length >= cap) break;
     const kanji = word.kanji && word.kanji[0];
     const kana = word.kana && word.kana[0];
     if(!kana) continue;
@@ -347,13 +356,13 @@ function extractNouns(commonData, fullData, seenReadings){
     const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
     if(!gloss) continue;
 
-    addEntry(out, seenReadings, CAPS.noun, {
+    addEntry(out, seenReadings, cap, {
       w: (kanji && kanji.text) || kana.text,
       r: reading,
       m: '普通名詞',
     });
   }
-  console.log(`一般名詞: ${out.length}語(うち「よく使われる」語: ${commonCount}語)`);
+  console.log(`一般名詞(追加分): ${out.length}語`);
   return out;
 }
 
@@ -1000,9 +1009,12 @@ async function main(){
   // JMdict/JMnedictの単純な種別ラベルより情報量が多いため、読みが重複した場合は
   // Wikidata側を優先する(=先に登録する)順序にしている。
   const seenReadings = new Set();
-  const nouns = extractNouns(commonData, fullData, seenReadings);
+  const commonNouns = extractNouns(commonData, seenReadings);
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
+  // ことわざ・専門用語より後に呼ぶ(理由はextractExtraNouns上部のコメント参照)。
+  const extraNouns = extractExtraNouns(fullData, seenReadings, CAPS.noun - commonNouns.length);
+  const nouns = [...commonNouns, ...extraNouns];
 
   // まずWiktionary(ネットワーク通信を伴わない、事前取得済みのMap参照のみ)で
   // 日本語の説明文を補い、それでも埋まらなかった分だけWikidataとの表記一致で補完する。
