@@ -123,21 +123,37 @@ async function fetchWiktionaryDefinitions(){
   try{
     const res = await fetch(WIKTIONARY_URL);
     if(!res.ok) throw new Error(`Wiktionaryデータのダウンロードに失敗: ${res.status}`);
+    const source = Readable.fromWeb(res.body);
     const gunzip = zlib.createGunzip();
-    Readable.fromWeb(res.body).pipe(gunzip);
+    // .pipe()だけだと、ダウンロード元ストリーム(res.body)や展開ストリームが
+    // 途中でネットワークタイムアウト等により'error'を出したとき、それが
+    // try/catchで拾えず「Unhandled 'error' event」としてプロセスごと
+    // クラッシュすることを確認した(600MB超のファイルを数分かけてダウンロード
+    // する都合上、途中で切れる事故は珍しくない)。両方のストリームに明示的な
+    // エラーハンドラを付けてPromiseの却下に変換し、通常の読み込み完了と
+    // Promise.raceさせることで、エラー発生時もtry/catchで正しく捕捉できる
+    // ようにする。
+    const streamError = new Promise((_, reject) => {
+      source.on('error', reject);
+      gunzip.on('error', reject);
+    });
+    source.pipe(gunzip);
     const rl = readline.createInterface({ input: gunzip, crlfDelay: Infinity });
     let lines = 0, jaLines = 0;
-    for await (const line of rl){
-      lines++;
-      if(!line) continue;
-      let obj;
-      try{ obj = JSON.parse(line); }catch(e){ continue; }
-      if(obj.lang_code !== 'ja') continue;
-      jaLines++;
-      if(byWord.has(obj.word)) continue; // 同じ見出し語は先に見つかった語義を優先する
-      const gloss = pickWiktionaryGloss(obj.senses);
-      if(gloss) byWord.set(obj.word, gloss);
-    }
+    const readLines = (async () => {
+      for await (const line of rl){
+        lines++;
+        if(!line) continue;
+        let obj;
+        try{ obj = JSON.parse(line); }catch(e){ continue; }
+        if(obj.lang_code !== 'ja') continue;
+        jaLines++;
+        if(byWord.has(obj.word)) continue; // 同じ見出し語は先に見つかった語義を優先する
+        const gloss = pickWiktionaryGloss(obj.senses);
+        if(gloss) byWord.set(obj.word, gloss);
+      }
+    })();
+    await Promise.race([readLines, streamError]);
     console.log(`  Wiktionary読み込み完了: 全${lines}行中、日本語エントリ${jaLines}件、説明文を抽出できた見出し語${byWord.size}件`);
   }catch(err){
     console.warn(`  Wiktionaryデータの取得に失敗しました(このカテゴリはスキップします): ${err.message}`);
