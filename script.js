@@ -215,11 +215,17 @@ import { parseTSV } from './tsv.js';
   // ということがないよう、AIの手選びで優先的に(=高い確率で)選ぶための重み。
   // 0にはしない(=完全に選ばなくなる)ことで無名な語(ニッチな語)も出続けるようにする。
   const FAME_WEIGHT = 6;
+  // d(簡単な日本語解説)が付いている語を優先する重み。mは「普通名詞」等の
+  // 分類ラベルに過ぎずほぼ全語に付いているため判定には使わない。プレイヤーが
+  // 「へえ」となるような語が出やすくなるよう、著名度の重みとは別に掛け合わせる。
+  const DEF_WEIGHT = 4;
   const HARD_FAMOUS_SHORTLIST = 20;   // 上位HARD_OUTER_CAPに入らなくても、著名な語は別枠でこの件数まで深掘り対象に加える
   const HARD_NEAR_OPTIMAL_MARGIN = 1; // 最善のdeepScoreからこの差までは「ほぼ互角」として著名優先の対象にする
   function weightedPick(list){
     if(list.length === 1) return list[0];
-    const weights = list.map(s => s.e.t === 1 ? FAME_WEIGHT : 1);
+    const weights = list.map(s =>
+      (s.e.t === 1 ? FAME_WEIGHT : 1) * (s.e.d ? DEF_WEIGHT : 1)
+    );
     const total = weights.reduce((a,b) => a+b, 0);
     let r = Math.random() * total;
     for(let i = 0; i < list.length; i++){
@@ -290,12 +296,13 @@ import { parseTSV } from './tsv.js';
     // hard: まず概算値(kanaSizeApprox)で有望な候補に絞り込み、その上位だけを
     // 使用済みを考慮した正確な探索で2〜3手先まで深掘りして最終決定する
     // (合法手すべてを正確に数えてから深く読むと、語彙が大きいときに重すぎるため)。
-    // 上位HARD_OUTER_CAP件に加えて、そこに入らなかった著名な語も別枠で深掘り対象に加える
-    // (でないと数十万語の中で著名な語がそもそも検討すらされないことがあるため)。
+    // 上位HARD_OUTER_CAP件に加えて、そこに入らなかった著名な語・解説付きの語も
+    // 別枠で深掘り対象に加える(でないと数十万語の中でそうした語がそもそも
+    // 検討すらされないことがあるため)。
     usable.sort((a,b) => a.approxOptions - b.approxOptions);
     const deepPoolSet = new Set(usable.slice(0, HARD_OUTER_CAP));
     for(const s of usable){
-      if(s.e.t === 1){
+      if(s.e.t === 1 || s.e.d){
         if(deepPoolSet.size - HARD_OUTER_CAP >= HARD_FAMOUS_SHORTLIST) break;
         deepPoolSet.add(s);
       }

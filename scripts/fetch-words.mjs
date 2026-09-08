@@ -179,7 +179,7 @@ const NOUN_POS = new Set(['n', 'n-adv', 'n-t', 'n-pref', 'n-suf', 'n-pr']);
 // 抽出する語数の上限。種別ごとに設けているのは、無名すぎる語(人名の末端など)で
 // 辞書全体が埋まってゲームとして破綻するのを避けるため。値自体はここで調整できる。
 const CAPS = {
-  noun: 20000,
+  noun: 90000,
   place: 150000,
   person: 40000, // 著名人(伝記情報あり)のみ採用するため、上限自体は実質効かない想定
 };
@@ -304,13 +304,16 @@ function addEntry(out, seenReadings, cap, { w, r, m, t, d }){
   return true;
 }
 
-function extractNouns(data, seenReadings){
+function extractNouns(commonData, fullData, seenReadings){
   const out = [];
-  for(const word of data.words){
+  // まず「よく使われる(common)」語をtier1(著名優先)として採用する。
+  // りんご・机のような誰でも知っている一般語なので、数万〜数十万語の専門用語・
+  // 固有名詞に埋もれて出にくくならないよう優先的に選ばれるようにしている。
+  for(const word of commonData.words){
     if(out.length >= CAPS.noun) break;
     const kanjiCommon = (word.kanji || []).find(k => k.common);
     const kanaCommon = (word.kana || []).find(k => k.common);
-    if(!kanaCommon) continue; // 「よく使われる」語だけを対象にする
+    if(!kanaCommon) continue;
 
     const reading = toHiragana(kanaCommon.text);
     const isNoun = word.sense.some(s => (s.partOfSpeech || []).some(p => NOUN_POS.has(p)));
@@ -319,9 +322,6 @@ function extractNouns(data, seenReadings){
     const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
     if(!gloss) continue;
 
-    // JMdictの「よく使われる(common)」フラグが付いた語は、りんご・机のような
-    // 誰でも知っている一般語である。数万〜数十万語の専門用語・固有名詞に埋もれて
-    // 出にくくならないよう、この一般名詞は丸ごと tier1(著名優先)にしている。
     addEntry(out, seenReadings, CAPS.noun, {
       w: (kanjiCommon && kanjiCommon.text) || kanaCommon.text,
       r: reading,
@@ -329,7 +329,31 @@ function extractNouns(data, seenReadings){
       t: 1,
     });
   }
-  console.log(`一般名詞: ${out.length}語`);
+  const commonCount = out.length;
+
+  // 一般名詞をさらに増やすため、フル版(jmdict-eng)から「よく使われる」フラグの
+  // 有無を問わず名詞系の語を追加で拾う。commonフラグが無い分、tierは付けない
+  // (=AIの手選びで最優先にはならないが、確実に手の候補には入る)。
+  for(const word of fullData.words){
+    if(out.length >= CAPS.noun) break;
+    const kanji = word.kanji && word.kanji[0];
+    const kana = word.kana && word.kana[0];
+    if(!kana) continue;
+
+    const reading = toHiragana(kana.text);
+    const isNoun = word.sense.some(s => (s.partOfSpeech || []).some(p => NOUN_POS.has(p)));
+    if(!isNoun) continue;
+
+    const gloss = word.sense.flatMap(s => s.gloss || []).find(g => g.lang === 'eng');
+    if(!gloss) continue;
+
+    addEntry(out, seenReadings, CAPS.noun, {
+      w: (kanji && kanji.text) || kana.text,
+      r: reading,
+      m: '普通名詞',
+    });
+  }
+  console.log(`一般名詞: ${out.length}語(うち「よく使われる」語: ${commonCount}語)`);
   return out;
 }
 
@@ -976,7 +1000,7 @@ async function main(){
   // JMdict/JMnedictの単純な種別ラベルより情報量が多いため、読みが重複した場合は
   // Wikidata側を優先する(=先に登録する)順序にしている。
   const seenReadings = new Set();
-  const nouns = extractNouns(commonData, seenReadings);
+  const nouns = extractNouns(commonData, fullData, seenReadings);
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
 
