@@ -7,12 +7,9 @@ import { parseTSV } from './tsv.js';
   const submitBtn = document.getElementById('submitBtn');
   const medallion = document.getElementById('medallion');
   const medallionLabel = document.getElementById('medallionLabel');
-  const userScoreEl = document.getElementById('userScore');
-  const aiScoreEl = document.getElementById('aiScore');
   const strengthSelect = document.getElementById('strengthSelect');
   const restartBtn = document.getElementById('restartBtn');
   const toastEl = document.getElementById('toast');
-  const wordCountEl = document.getElementById('wordCount');
   const timerFill = document.getElementById('timerFill');
   const timerLabel = document.getElementById('timerLabel');
   const timerToggle = document.getElementById('timerToggle');
@@ -20,7 +17,6 @@ import { parseTSV } from './tsv.js';
   let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない
   let usedReadings = new Set(); // これまでに場に出た「読み」(ユーザー・AI問わず)
   let requiredKana = null;      // null = 最初の一手は自由
-  let score = {user:0, ai:0};
   let gameOver = false;
   let busy = true;
 
@@ -76,10 +72,13 @@ import { parseTSV } from './tsv.js';
     clearTimeout(showToast._t);
     showToast._t = setTimeout(()=> toastEl.classList.remove('show'), 2800);
   }
+  // medallionLabelは、チャット相手(辞書番)の名前の下にある「オンライン状態」の
+  // ようなステータステキストとして表示する(メッセンジャーアプリの見た目に
+  // 合わせるため、対局の進行状況をここに集約している)。
   function updateMedallion(){
     medallion.classList.remove('multi');
-    if(gameOver){ medallion.textContent = '終'; medallionLabel.innerHTML = '対局<br>終了'; return; }
-    if(!requiredKana){ medallion.textContent = '―'; medallionLabel.innerHTML = '最初の<br>ことばへ'; return; }
+    if(gameOver){ medallion.textContent = '終'; medallionLabel.textContent = '対局終了'; return; }
+    if(!requiredKana){ medallion.textContent = '―'; medallionLabel.textContent = '最初のことばへ'; return; }
     const opts = acceptableStartKana(requiredKana);
     if(opts.length > 1){
       medallion.textContent = opts.join('/');
@@ -87,9 +86,8 @@ import { parseTSV } from './tsv.js';
     }else{
       medallion.textContent = requiredKana;
     }
-    medallionLabel.innerHTML = 'この音<br>から';
+    medallionLabel.textContent = '「' + requiredKana + '」から始めてください';
   }
-  function updateScore(){ userScoreEl.textContent = score.user; aiScoreEl.textContent = score.ai; }
   // d(簡単な解説)があればそれを表示に使い、無ければ従来のm(種別ラベル/英語glossなど)に
   // フォールバックする。dはまだ全語には付いていないため、この関数を通して常に安全に読む。
   function entryMeaning(e){ return (e && (e.d || e.m)) || null; }
@@ -371,7 +369,6 @@ import { parseTSV } from './tsv.js';
     }
 
     usedReadings.add(resolved.reading);
-    score.user++; updateScore();
     renderCard({word: resolved.word, reading: resolved.reading, meaning: resolved.meaning, by:'user', requiredWasSet: !!requiredKana});
 
     // ユーザーの言葉が「ん」で終わっていれば、ここで即負け
@@ -395,7 +392,6 @@ import { parseTSV } from './tsv.js';
       gameOver = true; updateMedallion(); setBusy(true); clearTurnTimer(); return;
     }
     usedReadings.add(move.e.r);
-    score.ai++; updateScore();
     renderCard({word: move.e.w, reading: move.e.r, meaning: entryMeaning(move.e), by:'ai', requiredWasSet:true});
 
     // 辞書番の言葉が「ん」で終わっていれば、辞書番の即負け
@@ -412,8 +408,8 @@ import { parseTSV } from './tsv.js';
   }
 
   function restart(){
-    usedReadings = new Set(); requiredKana = null; score = {user:0, ai:0}; gameOver = false;
-    updateScore(); updateMedallion();
+    usedReadings = new Set(); requiredKana = null; gameOver = false;
+    updateMedallion();
     chainEl.innerHTML = '<div class="empty-hint" id="emptyHint"><div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。</div>';
     setBusy(false);
     clearTurnTimer(); // 最初の自由な一手に戻るので、進行中だった持ち時間は止める
@@ -448,8 +444,7 @@ import { parseTSV } from './tsv.js';
       showToast('辞書データの読み込みに失敗しました(ローカルサーバー経由で開いてください)');
     }
     buildWordIndex();
-    wordCountEl.textContent = WORDS.length.toLocaleString('ja-JP');
-    updateScore(); updateMedallion();
+    updateMedallion();
     setBusy(false);
   }
 
