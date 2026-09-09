@@ -11,20 +11,22 @@
   --danger:#FF3B30;
   --radius:10px;
 }
-*{box-sizing:border-box;}
-html,body{margin:0;padding:0;height:100%;}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;height:100%; overscroll-behavior:none;}
 body{
   background-color:var(--bg);
   color:var(--ink);
   font-family:-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;
-  min-height:100vh;
+  height:100vh;
+  height:100dvh; /* dvhに対応したブラウザではこちらが優先される(モバイルのアドレスバー分の誤差を吸収) */
   display:flex;
   justify-content:center;
+  overflow:hidden; /* ページ全体はスクロールさせず、chatログ(main)だけを内部スクロールさせる */
 }
 .app{
   width:100%;
   max-width:640px;
-  min-height:100vh;
+  height:100%;
   display:flex;
   flex-direction:column;
   position:relative;
@@ -37,6 +39,9 @@ body{
   flex-direction:column;
   flex:1;
   min-width:0;
+  min-height:0; /* flexアイテムの既定値(auto)のままだとmain側のoverflow-y:autoが効かず、
+                   ページ全体が伸びてスクロールしてしまう(モバイルでチャット部分だけが
+                   スクロールする、というメッセンジャーアプリらしい挙動にならない)。 */
 }
 
 header{
@@ -154,6 +159,8 @@ button.restart:hover{border-color:var(--accent); color:var(--accent);}
 main{
   flex:1;
   overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
   padding:20px 18px 110px;
   display:flex;
   flex-direction:column;
@@ -251,7 +258,7 @@ main{
 .input-bar{
   position:sticky;
   bottom:0;
-  padding:12px 18px 18px;
+  padding:12px 18px calc(18px + env(safe-area-inset-bottom));
   background:linear-gradient(180deg, rgba(255,255,255,0) 0%, var(--surface) 32%);
   display:flex;
   flex-direction:column;
@@ -270,10 +277,14 @@ main{
 .input-row input{
   flex:1;
   font:inherit;
-  font-size:15px;
+  /* 16px未満だとiOS Safariがフォーカス時に自動でページ全体を拡大してしまう
+     (よくあるモバイルUXの不具合)。メッセンジャーアプリのようにフォーカスしても
+     拡大されない挙動にするため16px以上にしている。 */
+  font-size:16px;
   padding:12px 14px;
+  min-height:44px; /* タップ領域はiOS/Android共通の目安である44px以上を確保する */
   border:1px solid var(--line);
-  border-radius:20px;
+  border-radius:22px;
   background:var(--bg);
   color:var(--ink);
 }
@@ -281,13 +292,15 @@ main{
 .input-row input:disabled{opacity:.5;}
 .input-row button{
   font:inherit;
-  font-size:14px;
+  font-size:15px;
   font-weight:700;
   padding:0 22px;
+  min-height:44px;
+  min-width:64px;
   border:none;
   background:var(--accent);
   color:#fff;
-  border-radius:20px;
+  border-radius:22px;
   cursor:pointer;
 }
 .input-row button:disabled{opacity:.4; cursor:default;}
@@ -301,6 +314,26 @@ main{
 .toast.show{opacity:.95;}
 main::-webkit-scrollbar{width:6px;}
 main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+/* スマホ幅では、説明文だらけの縦長ヘッダーではなく、メッセンジャーアプリの
+   ような薄いトップバー(アイコン+タイトル+スコア)にする。ルール説明の
+   subtitleは対局開始前の空メッセージ(empty-hint)側で既に案内しているため
+   非表示にし、チャットログの表示領域をできるだけ広く取る。 */
+@media (max-width:859px){
+  header{
+    padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
+  }
+  .title-row{align-items:center;}
+  .kanban{font-size:16px;}
+  .kanban .eyebrow{display:none;}
+  .offline-tag{display:none;}
+  .subtitle{display:none;}
+  .control-row{margin-top:8px; gap:10px;}
+  .medallion{width:38px; height:38px; font-size:16px;}
+  .medallion-label{font-size:9.5px;}
+  .settings-row{margin-top:8px; gap:8px; font-size:11px;}
+  select, button.restart{min-height:32px;}
+}
+
 @media (max-width:420px){
   .card{max-width:88%;}
   .score{gap:12px;}
