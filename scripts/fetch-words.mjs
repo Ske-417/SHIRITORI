@@ -1048,7 +1048,14 @@ async function main(){
   const commonNouns = extractNouns(commonData, seenReadings);
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
-  // ことわざ・専門用語より後に呼ぶ(理由はextractExtraNouns上部のコメント参照)。
+  // 固有名詞(JMnedict)も、一般名詞の追加抽出(extractExtraNouns)より先に呼ぶ:
+  // 後回しにすると、読みが重複する組織名・企業名・作品名・製品名などが
+  // 「普通名詞」として先取りされてしまい、それらのカテゴリの語数が激減する
+  // 不具合が起きる(実際に確認: 一般名詞の上限を90,000→200,000に引き上げた際、
+  // 組織名が4,904語→1,021語まで減少した)。
+  const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
+  // ことわざ・専門用語・固有名詞より後に呼ぶ(同じ理由。extractExtraNouns上部の
+  // コメントも参照)。
   const extraNouns = extractExtraNouns(fullData, seenReadings, CAPS.noun - commonNouns.length);
   const nouns = [...commonNouns, ...extraNouns];
 
@@ -1066,7 +1073,6 @@ async function main(){
   await enrichWithWikidataDescriptions(proverbs, 'ことわざ・故事成語');
   await enrichWithWikidataDescriptions(fieldTerms, '専門用語');
 
-  const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
   // 固有名詞にもWiktionaryを先に試す(著名な地名・人名・作品名等は掲載されていることがある)。
   enrichWithWiktionary(properNouns.out, wiktionary, '固有名詞', true);
   // JMnedict由来の著名人は英語の伝記文しか無いため、Wikidataとの表記一致(かつ人間限定)で
