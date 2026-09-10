@@ -1067,11 +1067,13 @@ async function main(){
   const commonNouns = extractNouns(commonData, seenReadings);
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
+  const mythology = extractMythology(fullData, seenReadings);
   // 固有名詞(JMnedict)も、一般名詞の追加抽出(extractExtraNouns)より先に呼ぶ:
   // 後回しにすると、読みが重複する組織名・企業名・作品名・製品名などが
   // 「普通名詞」として先取りされてしまい、それらのカテゴリの語数が激減する
   // 不具合が起きる(実際に確認: 一般名詞の上限を90,000→200,000に引き上げた際、
-  // 組織名が4,904語→1,021語まで減少した)。
+  // 組織名が4,904語→1,021語、神話が82語→0語まで減少した。神話も同じくfullData
+  // から抽出しており、先取り被害を受けるため同様に前へ移した)。
   const properNouns = extractProperNouns(neData, seenReadings, await fetchFamousJapanPlaceNamesSafe());
   // ことわざ・専門用語・固有名詞より後に呼ぶ(同じ理由。extractExtraNouns上部の
   // コメントも参照)。
@@ -1139,7 +1141,7 @@ async function main(){
     ...fieldTerms,
     ...(await extractWikidataBeings(seenReadings)),
     ...(await extractWikidataHumans(seenReadings)),
-    ...extractMythology(fullData, seenReadings),
+    ...mythology,
     ...properNouns.out,
   ];
 
