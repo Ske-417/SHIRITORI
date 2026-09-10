@@ -379,18 +379,19 @@ main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
   .back-btn{display:none;}
   .chat-name{font-size:20px;}
   .medallion{width:52px; height:52px; font-size:20px;}
+  /* mainと.input-barは.content(=画面幅から左サイドバー340px分を引いた幅)に
+     フィットさせ、固定のmax-width+margin:0 autoでレターボックス状の余白が
+     左右にできないようにする(ワイドディスプレイで指摘を受けた不具合)。
+     ふきだし自体は.cardのmax-widthで読みやすい幅に収まるため、外側の枠を
+     広げても中身が間延びして読みにくくなることはない。 */
   main{
-    max-width:760px;
     width:100%;
-    margin:0 auto;
-    padding:28px 32px 130px;
+    padding:28px 40px 130px;
   }
   .input-bar{
-    max-width:760px;
     width:100%;
-    margin:0 auto;
-    padding:14px 32px 26px;
+    padding:14px 40px 26px;
   }
-  .card{max-width:min(82%, 520px);}
-  .thinking-card{max-width:min(60%, 380px);}
+  .card{max-width:min(70%, 560px);}
+  .thinking-card{max-width:min(50%, 380px);}
 }
