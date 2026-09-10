@@ -93,11 +93,8 @@ body{
   width:46px; height:46px; flex-shrink:0;
   border-radius:50%;
   display:flex; align-items:center; justify-content:center;
-  font-size:18px; font-weight:700; color:#fff;
+  font-size:18px; font-weight:700;
 }
-.contact-avatar.strength-easy{background:#34C759;}
-.contact-avatar.strength-normal{background:#0A84FF;}
-.contact-avatar.strength-hard{background:#FF3B30;}
 .contact-info{min-width:0; flex:1;}
 .contact-name-row{display:flex; align-items:center; justify-content:space-between; gap:8px;}
 .contact-name{font-size:14.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
@@ -105,6 +102,7 @@ body{
   font-size:10px; font-weight:600; color:var(--ink-soft);
   background:var(--bg); padding:2px 7px; border-radius:999px; flex-shrink:0;
 }
+.contact-meta{margin-top:1px; font-size:11px; color:var(--ink-soft);}
 .contact-preview{
   margin-top:2px; font-size:12.5px; color:var(--ink-soft);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -159,6 +157,18 @@ header{
   flex-shrink:0;
 }
 .medallion.multi{font-size:12px; letter-spacing:-.02em;} /* 濁点/歴史的仮名遣いの緩和で2音表示になる場合 */
+/* 「道場」らしく、6段階の強さ×持ち時間の組み合わせを空手・柔道等の帯の色に
+   なぞらえたランクとして表現する(白帯が最も易しく、黒帯が最も難しい)。
+   トーク一覧のアバター(.contact-avatar)とチャットヘッダーのアバター
+   (.medallion)の両方に使うため、要素を限定しない汎用クラスにしてある。
+   (.medallion/.contact-avatar自体のbackground宣言より後に置くことで、
+   ここでのbackground指定が優先されるようにしている) */
+.belt-white{background:#F5F5F0; border:1.5px solid var(--line); color:var(--ink);}
+.belt-yellow{background:#FFD60A; color:var(--ink);}
+.belt-green{background:#34C759; color:#fff;}
+.belt-blue{background:#0A84FF; color:#fff;}
+.belt-brown{background:#8B5A2B; color:#fff;}
+.belt-black{background:#1C1C1E; color:#fff;}
 .medallion-label{
   font-size:12.5px; color:var(--ink-soft); margin-top:1px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;

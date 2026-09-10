@@ -19,23 +19,30 @@ import { parseTSV } from './tsv.js';
   let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない。全会話で共有する
   let busy = true;              // 現在アクティブな会話がターン処理中かどうか(処理中は会話の切り替えを禁止する)
 
-  // ---------------- 「6人のチャット相手」(強さ×持ち時間の有無) ----------------
+  // ---------------- 「6人のチャット相手」(6段階の帯ランク) ----------------
   // メッセンジャーアプリの連絡先リストのように、強さ・持ち時間の有無の組み合わせ
   // ごとに別々の相手(=別々の対局・別々の会話履歴)として扱う。対局中の強さ変更や
   // 持ち時間のON/OFF切り替えという概念は無くなり、代わりに「どの相手とチャット
-  // しているか」を選ぶ形になる。
+  // しているか」を選ぶ形になる。「道場」らしく、持ち時間の有無も含めた易しい順を
+  // 空手・柔道等の帯の色になぞらえた6段階のランクとして表現する(持ち時間ありの方が
+  // 同じ強さの持ち時間無しより難しい、という前提で並べている)。
   const STRENGTH_LABELS = { easy:'やさしめ', normal:'ふつう', hard:'めちゃ強い' };
-  const CONTACTS = [];
-  for(const strength of ['easy', 'normal', 'hard']){
-    for(const timerOn of [true, false]){
-      CONTACTS.push({
-        id: strength + '-' + (timerOn ? 'timer' : 'notimer'),
-        strength,
-        timerOn,
-        name: '辞書番(' + STRENGTH_LABELS[strength] + ')',
-      });
-    }
-  }
+  const RANKS = [
+    { strength:'easy',   timerOn:false, belt:'白帯', beltClass:'white'  },
+    { strength:'easy',   timerOn:true,  belt:'黄帯', beltClass:'yellow' },
+    { strength:'normal', timerOn:false, belt:'緑帯', beltClass:'green'  },
+    { strength:'normal', timerOn:true,  belt:'青帯', beltClass:'blue'   },
+    { strength:'hard',   timerOn:false, belt:'茶帯', beltClass:'brown'  },
+    { strength:'hard',   timerOn:true,  belt:'黒帯', beltClass:'black'  },
+  ];
+  const CONTACTS = RANKS.map(r => ({
+    id: r.strength + '-' + (r.timerOn ? 'timer' : 'notimer'),
+    strength: r.strength,
+    timerOn: r.timerOn,
+    belt: r.belt,
+    beltClass: r.beltClass,
+    name: '辞書番【' + r.belt + '】',
+  }));
   const CONTACTS_BY_ID = new Map(CONTACTS.map(c => [c.id, c]));
 
   const TURN_TIME_LIMIT = 60; // 秒(強さに関わらず一律)
@@ -126,8 +133,13 @@ import { parseTSV } from './tsv.js';
     // 両方表示するため、このクラスは無視される。
     appEl.classList.toggle('screen-chat', name === 'chat');
   }
+  const BELT_CLASSES = RANKS.map(r => 'belt-' + r.beltClass);
   function updateChatHeader(){
-    chatNameEl.textContent = CONTACTS_BY_ID.get(activeId).name;
+    const c = CONTACTS_BY_ID.get(activeId);
+    chatNameEl.textContent = c.name;
+    // ヘッダーのアバター(medallion)も、選んでいる相手の帯の色に合わせる。
+    medallion.classList.remove(...BELT_CLASSES);
+    medallion.classList.add('belt-' + c.beltClass);
   }
   // medallionLabelは、チャット相手(辞書番)の名前の下にある「オンライン状態」の
   // ようなステータステキストとして表示する(メッセンジャーアプリの見た目に
@@ -247,7 +259,7 @@ import { parseTSV } from './tsv.js';
       row.className = 'contact-row' + (c.id === activeId ? ' active' : '');
 
       const avatar = document.createElement('div');
-      avatar.className = 'contact-avatar strength-' + c.strength;
+      avatar.className = 'contact-avatar belt-' + c.beltClass;
       avatar.textContent = '辞';
 
       const info = document.createElement('div');
@@ -260,14 +272,18 @@ import { parseTSV } from './tsv.js';
       nameEl.textContent = c.name;
       const badge = document.createElement('span');
       badge.className = 'contact-badge';
-      badge.textContent = c.timerOn ? '60秒' : 'タイマーなし';
+      badge.textContent = STRENGTH_LABELS[c.strength];
       nameRow.appendChild(nameEl); nameRow.appendChild(badge);
+
+      const meta = document.createElement('div');
+      meta.className = 'contact-meta';
+      meta.textContent = c.timerOn ? '持ち時間60秒' : '持ち時間なし';
 
       const preview = document.createElement('div');
       preview.className = 'contact-preview';
       preview.textContent = contactPreview(conv);
 
-      info.appendChild(nameRow); info.appendChild(preview);
+      info.appendChild(nameRow); info.appendChild(meta); info.appendChild(preview);
       row.appendChild(avatar); row.appendChild(info);
       row.addEventListener('click', () => selectContact(c.id));
       contactsEl.appendChild(row);
