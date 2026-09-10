@@ -1,12 +1,13 @@
 :root{
   --bg:#F0F1F5;
   --surface:#FFFFFF;
+  --chat-bg:#F5F8F5;
   --ink:#1C1C1E;
   --ink-soft:#6E6E73;
   --ink-faint:#AEAEB2;
-  --accent:#0A84FF;
-  --accent-soft:#CFE6FF;
-  --ai-bubble:#E9E9EB;
+  --accent:#06C655; /* LINEのブランドグリーンを基調にする */
+  --accent-soft:#E1F7E9;
+  --ai-bubble:#FFFFFF;
   --line:#E3E3E8;
   --danger:#FF3B30;
   --radius:10px;
@@ -34,8 +35,84 @@ body{
   border-left:1px solid var(--line);
   border-right:1px solid var(--line);
 }
-.content{
+
+/* ---------------- トーク一覧(連絡先リスト) ----------------
+   実際のメッセンジャーアプリの「トーク一覧」画面を模し、強さ×持ち時間の
+   有無の組み合わせごとに別々の相手(=別々の会話)として選べるようにする。
+   スマホ幅では下記のスマホ用セクションで「チャット画面」と1画面ずつ
+   切り替える(LINE等と同様)。PC幅では左サイドバーとして常時表示する。 */
+.contact-list{
   display:flex;
+  flex-direction:column;
+  width:100%;
+  height:100%;
+  background:var(--surface);
+  min-height:0;
+}
+.contact-list-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:calc(14px + env(safe-area-inset-top)) 16px 12px;
+  border-bottom:1px solid var(--line);
+  flex-shrink:0;
+}
+.app-title{font-size:19px; font-weight:700; letter-spacing:-.01em;}
+.restart-all{
+  font:inherit;
+  font-size:12px;
+  font-weight:600;
+  padding:6px 12px;
+  border:1px solid var(--line);
+  background:var(--bg);
+  color:var(--ink-soft);
+  border-radius:999px;
+  cursor:pointer;
+  flex-shrink:0;
+}
+.restart-all:hover{border-color:var(--danger); color:var(--danger);}
+.contacts{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;}
+.contact-row{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  width:100%;
+  padding:12px 16px;
+  border:none;
+  border-bottom:1px solid var(--line);
+  background:none;
+  text-align:left;
+  cursor:pointer;
+  font:inherit;
+  color:inherit;
+}
+.contact-row:hover{background:var(--bg);}
+.contact-row.active{background:var(--accent-soft);}
+.contact-avatar{
+  width:46px; height:46px; flex-shrink:0;
+  border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; font-weight:700; color:#fff;
+}
+.contact-avatar.strength-easy{background:#34C759;}
+.contact-avatar.strength-normal{background:#0A84FF;}
+.contact-avatar.strength-hard{background:#FF3B30;}
+.contact-info{min-width:0; flex:1;}
+.contact-name-row{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+.contact-name{font-size:14.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.contact-badge{
+  font-size:10px; font-weight:600; color:var(--ink-soft);
+  background:var(--bg); padding:2px 7px; border-radius:999px; flex-shrink:0;
+}
+.contact-preview{
+  margin-top:2px; font-size:12.5px; color:var(--ink-soft);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+/* ---------------- チャット画面 ---------------- */
+.content{
+  display:none; /* 既定(スマホ幅)では非表示。#app.screen-chatのときだけ表示する */
   flex-direction:column;
   flex:1;
   min-width:0;
@@ -43,16 +120,28 @@ body{
                    ページ全体が伸びてスクロールしてしまう(モバイルでチャット部分だけが
                    スクロールする、というメッセンジャーアプリらしい挙動にならない)。 */
 }
+#app.screen-chat .contact-list{display:none;}
+#app.screen-chat .content{display:flex;}
 
 header{
   padding:14px 16px 10px;
   border-bottom:1px solid var(--line);
   position:relative;
+  display:flex;
+  align-items:center;
+  gap:2px;
+  flex-shrink:0;
+}
+.back-btn{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:30px; height:30px; flex-shrink:0; margin-right:2px;
+  border:none; background:none; cursor:pointer; padding:0;
+  font-size:26px; line-height:1; color:var(--accent);
 }
 /* 実際のメッセンジャーアプリの「相手の名前+オンライン状態」の見た目を模した
    チャット相手(辞書番)バー。アバターには対局の進行状況(次に打つべき音)を
    兼ねさせ、その下のステータス行に状況を文章で表示する。 */
-.chat-bar{display:flex; align-items:center; gap:12px;}
+.chat-bar{display:flex; align-items:center; gap:12px; flex:1; min-width:0;}
 .chat-info{min-width:0;}
 .chat-name{
   font-size:17px;
@@ -70,50 +159,17 @@ header{
   flex-shrink:0;
 }
 .medallion.multi{font-size:12px; letter-spacing:-.02em;} /* 濁点/歴史的仮名遣いの緩和で2音表示になる場合 */
-.medallion-label{font-size:12.5px; color:var(--ink-soft); margin-top:1px;}
-.settings-row{
-  margin-top:10px;
-  display:flex;
-  align-items:center;
-  gap:10px;
-  font-size:11.5px;
-  color:var(--ink-soft);
-  flex-wrap:wrap;
+.medallion-label{
+  font-size:12.5px; color:var(--ink-soft); margin-top:1px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
-select{
-  font:inherit;
-  font-size:12px;
-  padding:5px 8px;
-  border:1px solid var(--line);
-  background:var(--bg);
-  border-radius:var(--radius);
-  color:var(--ink);
-}
-button.restart{
-  font:inherit;
-  font-size:11.5px;
-  padding:5px 12px;
-  border:1px solid var(--line);
-  background:var(--bg);
-  color:var(--ink-soft);
-  border-radius:var(--radius);
-  cursor:pointer;
-}
-button.restart:hover{border-color:var(--accent); color:var(--accent);}
-.timer-toggle{
-  display:flex;
-  align-items:center;
-  gap:4px;
-  cursor:pointer;
-  user-select:none;
-}
-.timer-toggle input{accent-color:var(--accent); cursor:pointer;}
 
 main{
   flex:1;
   overflow-y:auto;
   -webkit-overflow-scrolling:touch;
   overscroll-behavior:contain;
+  background:var(--chat-bg);
   padding:20px 18px 110px;
   display:flex;
   flex-direction:column;
@@ -140,12 +196,13 @@ main{
   animation:cardIn .22s ease;
   max-width:78%;
 }
-/* メッセンジャーアプリの通例(iMessage/LINE等)に合わせ、自分(user)が送った
+/* メッセンジャーアプリの通例(LINE/iMessage等)に合わせ、自分(user)が送った
    ふきだしは右側・アクセントカラー、相手(ai/辞書番)が送ったふきだしは
-   左側・グレーにする。 */
+   左側・白(枠線付き)にする。 */
 .card.ai{
   margin-right:auto;
   background:var(--ai-bubble);
+  border:1px solid var(--line);
   color:var(--ink);
   border-bottom-left-radius:4px;
 }
@@ -183,13 +240,14 @@ main{
   font-size:12px;
   color:var(--ink-soft);
   background:var(--ai-bubble);
+  border:1px solid var(--line);
   border-radius:18px;
   display:flex;
   align-items:center;
   gap:8px;
 }
 .thinking-card.ai{margin-right:auto; border-bottom-left-radius:4px;}
-.thinking-card.user{margin-left:auto; background:var(--accent); color:#fff; border-bottom-right-radius:4px;}
+.thinking-card.user{margin-left:auto; background:var(--accent); border-color:var(--accent); color:#fff; border-bottom-right-radius:4px;}
 .thinking-card.user .dot{background:rgba(255,255,255,.6);}
 .dot{width:4.5px;height:4.5px;border-radius:50%;background:var(--ink-faint);animation:blink 1.2s infinite ease-in-out;}
 .dot:nth-child(2){animation-delay:.2s;}
@@ -199,6 +257,7 @@ main{
   text-align:center;
   padding:22px 18px;
   background:var(--ai-bubble);
+  border:1px solid var(--line);
   border-radius:18px;
   margin-top:4px;
 }
@@ -215,8 +274,9 @@ main{
 .input-bar{
   position:sticky;
   bottom:0;
+  flex-shrink:0;
   padding:12px 18px calc(18px + env(safe-area-inset-bottom));
-  background:linear-gradient(180deg, rgba(255,255,255,0) 0%, var(--surface) 32%);
+  background:linear-gradient(180deg, rgba(245,248,245,0) 0%, var(--chat-bg) 32%);
   display:flex;
   flex-direction:column;
   gap:7px;
@@ -242,7 +302,7 @@ main{
   min-height:44px; /* タップ領域はiOS/Android共通の目安である44px以上を確保する */
   border:1px solid var(--line);
   border-radius:22px;
-  background:var(--bg);
+  background:var(--surface);
   color:var(--ink);
 }
 .input-row input:focus{outline:2px solid var(--accent-soft); outline-offset:1px; border-color:var(--accent);}
@@ -261,7 +321,7 @@ main{
   cursor:pointer;
 }
 .input-row button:disabled{opacity:.4; cursor:default;}
-.input-row button:not(:disabled):hover{background:#0970DB;}
+.input-row button:not(:disabled):hover{background:#05A648;}
 .toast{
   position:fixed; bottom:88px; left:50%; transform:translateX(-50%);
   background:var(--ink); color:var(--surface); padding:8px 16px;
@@ -271,27 +331,23 @@ main{
 .toast.show{opacity:.95;}
 main::-webkit-scrollbar{width:6px;}
 main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
-/* スマホ幅では、説明文だらけの縦長ヘッダーではなく、メッセンジャーアプリの
-   ような薄いトップバー(アイコン+タイトル+スコア)にする。ルール説明の
-   subtitleは対局開始前の空メッセージ(empty-hint)側で既に案内しているため
-   非表示にし、チャットログの表示領域をできるだけ広く取る。 */
+
 @media (max-width:859px){
-  header{
-    padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
-  }
+  .contact-list-header{padding:calc(10px + env(safe-area-inset-top)) 14px 8px;}
+  .app-title{font-size:17px;}
+  header{padding:calc(10px + env(safe-area-inset-top)) 14px 8px;}
   .medallion{width:38px; height:38px; font-size:15px;}
   .chat-name{font-size:15px;}
   .medallion-label{font-size:11px;}
-  .settings-row{margin-top:8px; gap:8px; font-size:11px;}
-  select, button.restart{min-height:32px;}
 }
 
 @media (max-width:420px){
   .card{max-width:88%;}
 }
 
-/* PCブラウザ向け: 640px固定の1カラムから、左にヘッダー(相手の情報+設定)、
-   右に対局ログという2カラムのフルスクリーンレイアウトに切り替える。 */
+/* PCブラウザ向け: 640px固定の1カラムから、左にトーク一覧、右にチャット画面
+   という2カラムのフルスクリーンレイアウトに切り替える(スマホのような画面
+   遷移はせず、Slack/Discord等のように両方を常時表示する)。 */
 @media (min-width:860px){
   body{padding:0;}
   .app{
@@ -302,18 +358,17 @@ main::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
     border-top:1px solid var(--line);
     border-bottom:1px solid var(--line);
   }
-  header{
+  .contact-list{
     width:340px;
     flex-shrink:0;
     height:100%;
-    overflow-y:auto;
-    border-bottom:none;
     border-right:1px solid var(--line);
-    padding:28px 24px 24px;
+    display:flex !important;
   }
+  .content{height:100%; min-height:0; display:flex !important;}
+  .back-btn{display:none;}
   .chat-name{font-size:20px;}
   .medallion{width:52px; height:52px; font-size:20px;}
-  .content{height:100%; min-height:0;}
   main{
     max-width:760px;
     width:100%;

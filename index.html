@@ -7,29 +7,27 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="app">
-  <header>
-    <div class="chat-bar">
-      <div class="medallion" id="medallion">―</div>
-      <div class="chat-info">
-        <div class="chat-name">辞書番</div>
-        <div class="medallion-label" id="medallionLabel">最初のことばへ</div>
-      </div>
+<div class="app" id="app">
+  <aside class="contact-list" id="contactList">
+    <div class="contact-list-header">
+      <div class="app-title">しりとり道場</div>
+      <button class="restart-all" id="restartAllBtn">はじめから</button>
     </div>
-
-    <div class="settings-row">
-      強さ：
-      <select id="strengthSelect">
-        <option value="easy">やさしめ</option>
-        <option value="normal">ふつう</option>
-        <option value="hard" selected>めちゃ強い</option>
-      </select>
-      <label class="timer-toggle"><input type="checkbox" id="timerToggle" checked>持ち時間</label>
-      <button class="restart" id="restartBtn">はじめから</button>
-    </div>
-  </header>
+    <div class="contacts" id="contacts"></div>
+  </aside>
 
   <div class="content">
+    <header>
+      <button class="back-btn" id="backBtn" aria-label="トーク一覧に戻る">‹</button>
+      <div class="chat-bar">
+        <div class="medallion" id="medallion">―</div>
+        <div class="chat-info">
+          <div class="chat-name" id="chatName">辞書番</div>
+          <div class="medallion-label" id="medallionLabel">最初のことばへ</div>
+        </div>
+      </div>
+    </header>
+
     <main id="chain">
       <div class="empty-hint" id="emptyHint">
         <div class="kanban-mini">— 対局開始 —</div>

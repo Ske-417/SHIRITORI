@@ -2,42 +2,70 @@ import { toHiragana, analyzeEnding, startKana, acceptableStartKana } from './kan
 import { parseTSV } from './tsv.js';
 
 (function(){
+  const appEl = document.getElementById('app');
+  const contactsEl = document.getElementById('contacts');
+  const restartAllBtn = document.getElementById('restartAllBtn');
+  const backBtn = document.getElementById('backBtn');
   const chainEl = document.getElementById('chain');
   const inputEl = document.getElementById('wordInput');
   const submitBtn = document.getElementById('submitBtn');
   const medallion = document.getElementById('medallion');
   const medallionLabel = document.getElementById('medallionLabel');
-  const strengthSelect = document.getElementById('strengthSelect');
-  const restartBtn = document.getElementById('restartBtn');
+  const chatNameEl = document.getElementById('chatName');
   const toastEl = document.getElementById('toast');
   const timerFill = document.getElementById('timerFill');
   const timerLabel = document.getElementById('timerLabel');
-  const timerToggle = document.getElementById('timerToggle');
 
-  let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない
-  let usedReadings = new Set(); // これまでに場に出た「読み」(ユーザー・AI問わず)
-  let requiredKana = null;      // null = 最初の一手は自由
-  let gameOver = false;
-  let busy = true;
+  let WORDS = [];               // 辞書番(AI)専用の辞書。ユーザーの入力判定には使わない。全会話で共有する
+  let busy = true;              // 現在アクティブな会話がターン処理中かどうか(処理中は会話の切り替えを禁止する)
 
-  // ---------------- 持ち時間(強さに関わらず一律) ----------------
-  const TURN_TIME_LIMIT = 60; // 秒
-  let turnInterval = null;
-  let turnRemaining = TURN_TIME_LIMIT;
-  function clearTurnTimer(){
-    if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
-    timerFill.style.width = '100%';
-    timerFill.classList.remove('urgent');
-    timerLabel.textContent = timerToggle.checked ? (TURN_TIME_LIMIT + '秒') : 'OFF';
-    timerLabel.classList.remove('urgent');
+  // ---------------- 「6人のチャット相手」(強さ×持ち時間の有無) ----------------
+  // メッセンジャーアプリの連絡先リストのように、強さ・持ち時間の有無の組み合わせ
+  // ごとに別々の相手(=別々の対局・別々の会話履歴)として扱う。対局中の強さ変更や
+  // 持ち時間のON/OFF切り替えという概念は無くなり、代わりに「どの相手とチャット
+  // しているか」を選ぶ形になる。
+  const STRENGTH_LABELS = { easy:'やさしめ', normal:'ふつう', hard:'めちゃ強い' };
+  const CONTACTS = [];
+  for(const strength of ['easy', 'normal', 'hard']){
+    for(const timerOn of [true, false]){
+      CONTACTS.push({
+        id: strength + '-' + (timerOn ? 'timer' : 'notimer'),
+        strength,
+        timerOn,
+        name: '辞書番(' + STRENGTH_LABELS[strength] + ')',
+      });
+    }
   }
-  function tickTurnTimer(){
-    turnRemaining--;
-    if(turnRemaining <= 0){
-      clearInterval(turnInterval); turnInterval = null;
-      timerFill.style.width = '0%';
-      timerLabel.textContent = '0秒';
-      handleTimeout();
+  const CONTACTS_BY_ID = new Map(CONTACTS.map(c => [c.id, c]));
+
+  const TURN_TIME_LIMIT = 60; // 秒(強さに関わらず一律)
+  function freshConversationState(contact){
+    return {
+      strength: contact.strength,
+      timerOn: contact.timerOn,
+      usedReadings: new Set(), // これまでに場に出た「読み」(ユーザー・AI問わず)
+      requiredKana: null,      // null = 最初の一手は自由
+      gameOver: false,
+      turnRemaining: TURN_TIME_LIMIT,
+      cards: [],                // 表示履歴(会話を切り替えて戻ってきたときに再描画するため)
+    };
+  }
+  let conversations = new Map(CONTACTS.map(c => [c.id, freshConversationState(c)]));
+  let activeId = 'hard-timer'; // 従来のデフォルト(強さ「めちゃ強い」・持ち時間ON)に合わせる
+  function active(){ return conversations.get(activeId); }
+
+  // usedReadingsはアクティブな会話のSetへの参照をそのまま持つショートカット
+  // (中身をadd()するだけなら会話オブジェクト側にも自動的に反映される)。
+  // turnRemainingは表示用の数値なので、会話切り替え時に明示的に保存・復元する。
+  let usedReadings = active().usedReadings;
+  let turnRemaining = active().turnRemaining;
+
+  // ---------------- 持ち時間 ----------------
+  let turnInterval = null;
+  function renderTurnTimerDisplay(){
+    if(!active().timerOn){
+      timerFill.style.width = '100%'; timerFill.classList.remove('urgent');
+      timerLabel.textContent = 'OFF'; timerLabel.classList.remove('urgent');
       return;
     }
     const pct = Math.max(0, (turnRemaining / TURN_TIME_LIMIT) * 100);
@@ -47,22 +75,42 @@ import { parseTSV } from './tsv.js';
     timerFill.classList.toggle('urgent', urgent);
     timerLabel.classList.toggle('urgent', urgent);
   }
+  function tickTurnTimer(){
+    turnRemaining--;
+    if(turnRemaining <= 0){
+      clearInterval(turnInterval); turnInterval = null;
+      turnRemaining = 0;
+      renderTurnTimerDisplay();
+      handleTimeout();
+      return;
+    }
+    renderTurnTimerDisplay();
+  }
   // 新しい手番を丸ごと開始する(持ち時間をTURN_TIME_LIMITに戻す)。
   function startTurnTimer(){
-    clearTurnTimer();
-    if(!timerToggle.checked || !requiredKana) return; // OFF、または最初の自由な一手は計測しない
+    if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
     turnRemaining = TURN_TIME_LIMIT;
+    renderTurnTimerDisplay();
+    if(!active().timerOn || !active().requiredKana) return; // OFF、または最初の自由な一手は計測しない
     turnInterval = setInterval(tickTurnTimer, 1000);
   }
   // 送信中の一瞬だけ計測を止める(残り時間はそのまま保持する)。
   function pauseTurnTimer(){
     if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
   }
-  // 「読みが特定できません」等、その場で弾かれた無効な入力の後に使う。
-  // 新しい手番ではないので、残り時間をTURN_TIME_LIMITに戻さずそこから再開する。
+  // 「読みが特定できません」等、その場で弾かれた無効な入力の後や、会話を
+  // 切り替えて戻ってきたときに使う。新しい手番ではないので、残り時間を
+  // TURN_TIME_LIMITに戻さずそこから再開する。
   function resumeTurnTimer(){
-    if(!timerToggle.checked || !requiredKana || turnInterval) return;
+    renderTurnTimerDisplay();
+    if(!active().timerOn || !active().requiredKana || active().gameOver || turnInterval) return;
     turnInterval = setInterval(tickTurnTimer, 1000);
+  }
+  // 対局終了時や、最初の自由な一手に戻ったときに使う(表示を60秒/フルに戻して止める)。
+  function clearTurnTimer(){
+    if(turnInterval){ clearInterval(turnInterval); turnInterval = null; }
+    turnRemaining = TURN_TIME_LIMIT;
+    renderTurnTimerDisplay();
   }
 
   // ---------------- UI ヘルパー ----------------
@@ -72,21 +120,31 @@ import { parseTSV } from './tsv.js';
     clearTimeout(showToast._t);
     showToast._t = setTimeout(()=> toastEl.classList.remove('show'), 2800);
   }
+  function showScreen(name){
+    // スマホ幅では「トーク一覧」と「個別チャット」を画面遷移で切り替える
+    // (LINE等の実際のメッセンジャーアプリと同様)。PC幅ではCSS側で常に
+    // 両方表示するため、このクラスは無視される。
+    appEl.classList.toggle('screen-chat', name === 'chat');
+  }
+  function updateChatHeader(){
+    chatNameEl.textContent = CONTACTS_BY_ID.get(activeId).name;
+  }
   // medallionLabelは、チャット相手(辞書番)の名前の下にある「オンライン状態」の
   // ようなステータステキストとして表示する(メッセンジャーアプリの見た目に
   // 合わせるため、対局の進行状況をここに集約している)。
   function updateMedallion(){
+    const conv = active();
     medallion.classList.remove('multi');
-    if(gameOver){ medallion.textContent = '終'; medallionLabel.textContent = '対局終了'; return; }
-    if(!requiredKana){ medallion.textContent = '―'; medallionLabel.textContent = '最初のことばへ'; return; }
-    const opts = acceptableStartKana(requiredKana);
+    if(conv.gameOver){ medallion.textContent = '終'; medallionLabel.textContent = '対局終了'; return; }
+    if(!conv.requiredKana){ medallion.textContent = '―'; medallionLabel.textContent = '最初のことばへ'; return; }
+    const opts = acceptableStartKana(conv.requiredKana);
     if(opts.length > 1){
       medallion.textContent = opts.join('/');
       medallion.classList.add('multi');
     }else{
-      medallion.textContent = requiredKana;
+      medallion.textContent = conv.requiredKana;
     }
-    medallionLabel.textContent = '「' + requiredKana + '」から始めてください';
+    medallionLabel.textContent = '「' + conv.requiredKana + '」から始めてください';
   }
   // d(簡単な解説)があればそれを表示に使い、無ければ従来のm(種別ラベル/英語glossなど)に
   // フォールバックする。dはまだ全語には付いていないため、この関数を通して常に安全に読む。
@@ -101,13 +159,11 @@ import { parseTSV } from './tsv.js';
     }).join('');
   }
 
-  function renderCard({word, reading, meaning, by, invalid, reason, requiredWasSet}){
-    const emptyHint = document.getElementById('emptyHint');
-    if(emptyHint && emptyHint.parentNode) emptyHint.remove();
-
+  // カードのDOM構築だけを行う純粋な関数(履歴からの再描画にも使うため、
+  // 「会話に記録する」処理とは分離してある)。
+  function buildCardEl({word, reading, meaning, by, invalid, reason, requiredWasSet}){
     const card = document.createElement('div');
     card.className = 'card ' + by + (invalid ? ' invalid' : '');
-
     if(!invalid){
       const wordRow = document.createElement('div');
       wordRow.className = 'word-row';
@@ -123,8 +179,28 @@ import { parseTSV } from './tsv.js';
       const rs = document.createElement('div'); rs.className='reason'; rs.textContent = reason || '無効です';
       card.appendChild(rs);
     }
-    chainEl.appendChild(card);
+    return card;
+  }
+  function buildGameOverEl({winner, note}){
+    const el = document.createElement('div');
+    el.className = 'gameover';
+    const win = winner === 'user';
+    const result = document.createElement('div');
+    result.className = 'result ' + (win ? 'win' : 'lose');
+    result.textContent = win ? 'あなたの勝ち' : '辞書番の勝ち';
+    const p = document.createElement('p');
+    p.innerHTML = note; // note はこちらで組み立てた文字列のみで、ユーザー入力を直接挿入することは無い
+    el.appendChild(result); el.appendChild(p);
+    return el;
+  }
+
+  function renderCard(data){
+    active().cards.push({ kind:'card', ...data });
+    const emptyHint = document.getElementById('emptyHint');
+    if(emptyHint && emptyHint.parentNode) emptyHint.remove();
+    chainEl.appendChild(buildCardEl(data));
     scrollToBottom();
+    renderContactList(); // 一覧側の「最後のメッセージ」プレビューを更新する
   }
   function renderThinking(by){
     const el = document.createElement('div');
@@ -135,11 +211,104 @@ import { parseTSV } from './tsv.js';
   }
   function removeThinking(){ const el = document.getElementById('thinkingCard'); if(el) el.remove(); }
   function renderGameOver(winner, note){
-    const el = document.createElement('div');
-    el.className = 'gameover';
-    const win = winner === 'user';
-    el.innerHTML = '<div class="result '+(win?'win':'lose')+'">'+(win?'あなたの勝ち':'辞書番の勝ち')+'</div><p>'+note+'</p>';
-    chainEl.appendChild(el); scrollToBottom();
+    active().cards.push({ kind:'gameover', winner, note });
+    chainEl.appendChild(buildGameOverEl({winner, note}));
+    scrollToBottom();
+    renderContactList();
+  }
+  // 会話を切り替えたとき、保存しておいた履歴からチャットログを丸ごと再構築する。
+  function renderChainFromHistory(conv){
+    chainEl.innerHTML = '';
+    if(conv.cards.length === 0){
+      chainEl.innerHTML = '<div class="empty-hint" id="emptyHint"><div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。</div>';
+      return;
+    }
+    for(const item of conv.cards){
+      chainEl.appendChild(item.kind === 'card' ? buildCardEl(item) : buildGameOverEl(item));
+    }
+    scrollToBottom();
+  }
+
+  // ---------------- 連絡先(トーク)一覧 ----------------
+  function contactPreview(conv){
+    for(let i = conv.cards.length - 1; i >= 0; i--){
+      const item = conv.cards[i];
+      if(item.kind === 'gameover') return item.winner === 'user' ? 'あなたの勝ち' : '辞書番の勝ち';
+      if(item.kind === 'card' && !item.invalid) return (item.by === 'user' ? 'あなた: ' : '辞書番: ') + item.word;
+    }
+    return 'まだ対局していません';
+  }
+  function renderContactList(){
+    contactsEl.innerHTML = '';
+    for(const c of CONTACTS){
+      const conv = conversations.get(c.id);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'contact-row' + (c.id === activeId ? ' active' : '');
+
+      const avatar = document.createElement('div');
+      avatar.className = 'contact-avatar strength-' + c.strength;
+      avatar.textContent = '辞';
+
+      const info = document.createElement('div');
+      info.className = 'contact-info';
+
+      const nameRow = document.createElement('div');
+      nameRow.className = 'contact-name-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'contact-name';
+      nameEl.textContent = c.name;
+      const badge = document.createElement('span');
+      badge.className = 'contact-badge';
+      badge.textContent = c.timerOn ? '60秒' : 'タイマーなし';
+      nameRow.appendChild(nameEl); nameRow.appendChild(badge);
+
+      const preview = document.createElement('div');
+      preview.className = 'contact-preview';
+      preview.textContent = contactPreview(conv);
+
+      info.appendChild(nameRow); info.appendChild(preview);
+      row.appendChild(avatar); row.appendChild(info);
+      row.addEventListener('click', () => selectContact(c.id));
+      contactsEl.appendChild(row);
+    }
+  }
+  function selectContact(id){
+    if(busy) return; // ターン処理中の切り替えは禁止(処理中の会話が宙に浮くのを避ける)
+    if(id !== activeId){
+      pauseTurnTimer();
+      active().turnRemaining = turnRemaining; // 現在の残り時間を出て行く会話側に保存
+
+      activeId = id;
+      const conv = active();
+      usedReadings = conv.usedReadings;
+      turnRemaining = conv.turnRemaining;
+
+      renderChainFromHistory(conv);
+      updateChatHeader();
+      updateMedallion();
+      setBusy(false);
+      if(!conv.gameOver && conv.requiredKana) resumeTurnTimer();
+      else clearTurnTimer();
+      renderContactList();
+    }
+    showScreen('chat');
+    inputEl.focus();
+  }
+  function restartAll(){
+    if(busy) return;
+    pauseTurnTimer();
+    conversations = new Map(CONTACTS.map(c => [c.id, freshConversationState(c)]));
+    const conv = active();
+    usedReadings = conv.usedReadings;
+    turnRemaining = conv.turnRemaining;
+    renderChainFromHistory(conv);
+    updateChatHeader();
+    updateMedallion();
+    setBusy(false);
+    clearTurnTimer();
+    renderContactList();
+    inputEl.focus();
   }
 
   // ---------------- ゲームロジック ----------------
@@ -208,7 +377,7 @@ import { parseTSV } from './tsv.js';
   const HARD_OUTER_CAP = 50;       // 一手目候補のうち、深く読むのは有望な上位何件までか
   const HARD_LOOKAHEAD_DEPTH = 2;  // 0=1手先読み(従来通り) 1=2手先読み 2=3手先読み
 
-  // 語彙(words-auto.json)には都道府県・主要都市・広く知られた偉人などに
+  // 語彙(words-auto.tsv)には都道府県・主要都市・広く知られた偉人などに
   // t:1(著名)の目印が付いている。数万〜数十万語の中に埋もれて滅多に選ばれない
   // ということがないよう、AIの手選びで優先的に(=高い確率で)選ぶための重み。
   // 0にはしない(=完全に選ばなくなる)ことで無名な語(ニッチな語)も出続けるようにする。
@@ -217,7 +386,7 @@ import { parseTSV } from './tsv.js';
   // 分類ラベルに過ぎずほぼ全語に付いているため判定には使わない。プレイヤーが
   // 「へえ」となるような語が出やすくなるよう、著名度の重みとは別に掛け合わせる。
   const DEF_WEIGHT = 4;
-  const HARD_FAMOUS_SHORTLIST = 20;   // 上位HARD_OUTER_CAPに入らなくても、著名な語は別枠でこの件数まで深掘り対象に加える
+  const HARD_FAMOUS_SHORTLIST = 20;   // 上位HARD_OUTER_CAPに入らなくても、著名な語・解説付きの語は別枠でこの件数まで深掘り対象に加える
   const HARD_NEAR_OPTIMAL_MARGIN = 1; // 最善のdeepScoreからこの差までは「ほぼ互角」として著名優先の対象にする
   function weightedPick(list){
     if(list.length === 1) return list[0];
@@ -323,15 +492,17 @@ import { parseTSV } from './tsv.js';
   // startTurnTimer/pauseTurnTimer/resumeTurnTimer/clearTurnTimerを使い分ける)。
   function setBusy(v){
     busy = v;
+    const gameOver = active().gameOver;
     inputEl.disabled = v || gameOver;
     submitBtn.disabled = v || gameOver;
   }
 
   // 制限時間(強さに関わらず一律 TURN_TIME_LIMIT 秒)以内に入力できなかった場合の即負け。
   function handleTimeout(){
-    if(busy || gameOver) return;
-    gameOver = true;
-    const hint = pickHintWord(requiredKana);
+    if(busy || active().gameOver) return;
+    const conv = active();
+    conv.gameOver = true;
+    const hint = pickHintWord(conv.requiredKana);
     let note = '制限時間('+TURN_TIME_LIMIT+'秒)以内に言葉を入力できませんでした。';
     if(hint){
       const shown = hint.w === hint.r ? hint.w : (hint.w+'('+hint.r+')');
@@ -343,7 +514,8 @@ import { parseTSV } from './tsv.js';
   }
 
   async function handleSubmit(){
-    if(busy || gameOver) return;
+    const conv = active();
+    if(busy || conv.gameOver) return;
     const val = inputEl.value.trim();
     if(!val) return;
     inputEl.value = '';
@@ -358,8 +530,8 @@ import { parseTSV } from './tsv.js';
       renderCard({word: val, invalid:true, reason:'読みが特定できません。ひらがな/カタカナで入力してください', by:'user'});
       setBusy(false); resumeTurnTimer(); return;
     }
-    if(requiredKana && !acceptableStartKana(requiredKana).includes(startKana(resolved.reading))){
-      const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
+    if(conv.requiredKana && !acceptableStartKana(conv.requiredKana).includes(startKana(resolved.reading))){
+      const opts = acceptableStartKana(conv.requiredKana).map(k => '「'+k+'」').join('か');
       renderCard({word: resolved.word, invalid:true, reason: opts+'から始まっていません', by:'user'});
       setBusy(false); resumeTurnTimer(); return;
     }
@@ -369,56 +541,47 @@ import { parseTSV } from './tsv.js';
     }
 
     usedReadings.add(resolved.reading);
-    renderCard({word: resolved.word, reading: resolved.reading, meaning: resolved.meaning, by:'user', requiredWasSet: !!requiredKana});
+    renderCard({word: resolved.word, reading: resolved.reading, meaning: resolved.meaning, by:'user', requiredWasSet: !!conv.requiredKana});
 
     // ユーザーの言葉が「ん」で終わっていれば、ここで即負け
     const ending = analyzeEnding(resolved.reading);
     if(ending.isN){
-      gameOver = true; updateMedallion();
+      conv.gameOver = true; updateMedallion();
       renderGameOver('ai', 'あなたの言葉の読みが「ん」で終わりました。');
       setBusy(true); clearTurnTimer(); return;
     }
-    requiredKana = ending.kana;
+    conv.requiredKana = ending.kana;
     updateMedallion();
 
     renderThinking('ai');
     await new Promise(r => setTimeout(r, 1000));
     removeThinking();
 
-    const move = pickAiMove(requiredKana, strengthSelect.value);
+    const move = pickAiMove(conv.requiredKana, conv.strength);
     if(!move){
-      const opts = acceptableStartKana(requiredKana).map(k => '「'+k+'」').join('か');
+      const opts = acceptableStartKana(conv.requiredKana).map(k => '「'+k+'」').join('か');
       renderGameOver('user', '辞書番の持ち駒('+opts+'から始まる言葉)が尽きました。');
-      gameOver = true; updateMedallion(); setBusy(true); clearTurnTimer(); return;
+      conv.gameOver = true; updateMedallion(); setBusy(true); clearTurnTimer(); return;
     }
     usedReadings.add(move.e.r);
     renderCard({word: move.e.w, reading: move.e.r, meaning: entryMeaning(move.e), by:'ai', requiredWasSet:true});
 
     // 辞書番の言葉が「ん」で終わっていれば、辞書番の即負け
     if(move.isN){
-      gameOver = true; updateMedallion();
+      conv.gameOver = true; updateMedallion();
       renderGameOver('user', '辞書番が読みが「ん」で終わる言葉を選ばざるを得ませんでした。');
       setBusy(true); clearTurnTimer(); return;
     }
-    requiredKana = move.end.kana;
+    conv.requiredKana = move.end.kana;
     updateMedallion();
     setBusy(false);
     startTurnTimer(); // ここからがあなたの新しい手番なので、持ち時間を60秒に戻す
     inputEl.focus();
   }
 
-  function restart(){
-    usedReadings = new Set(); requiredKana = null; gameOver = false;
-    updateMedallion();
-    chainEl.innerHTML = '<div class="empty-hint" id="emptyHint"><div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。</div>';
-    setBusy(false);
-    clearTurnTimer(); // 最初の自由な一手に戻るので、進行中だった持ち時間は止める
-    inputEl.focus();
-  }
-
-  // words-core.json(手作業・日本語の意味つき)と words-auto.json(自動取得分)を
-  // 両方読み込み、読み(reading)が重複する場合は words-core.json を優先してマージする。
-  // words-auto.json は無くても(未生成でも)動くようにする。
+  // words-core.tsv(手作業・日本語の意味つき)と words-auto.tsv(自動取得分)を
+  // 両方読み込み、読み(reading)が重複する場合は words-core.tsv を優先してマージする。
+  // words-auto.tsv は無くても(未生成でも)動くようにする。
   async function loadWords(){
     const [coreRes, autoRes] = await Promise.allSettled([
       fetch('words-core.tsv'),
@@ -444,7 +607,11 @@ import { parseTSV } from './tsv.js';
       showToast('辞書データの読み込みに失敗しました(ローカルサーバー経由で開いてください)');
     }
     buildWordIndex();
+    renderContactList();
+    updateChatHeader();
     updateMedallion();
+    renderChainFromHistory(active());
+    clearTurnTimer();
     setBusy(false);
   }
 
@@ -456,16 +623,8 @@ import { parseTSV } from './tsv.js';
     if(e.isComposing || e.keyCode === 229) return;
     handleSubmit();
   });
-  restartBtn.addEventListener('click', restart);
-  // ON/OFFの切り替えを即座に反映する(対局中でも切り替え可能)。
-  // OFFにした瞬間は計測をやめ、ONに戻した瞬間はあなたの手番であれば新たに計測を始める。
-  timerToggle.addEventListener('change', () => {
-    if(timerToggle.checked){
-      if(!busy && !gameOver && requiredKana) startTurnTimer();
-    }else{
-      clearTurnTimer();
-    }
-  });
+  restartAllBtn.addEventListener('click', restartAll);
+  backBtn.addEventListener('click', () => showScreen('list'));
 
   init();
 })();
