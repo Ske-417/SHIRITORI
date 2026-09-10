@@ -327,12 +327,31 @@ async function downloadJson(asset, retries = 3){
 // 通常語は t を省略してよい(その場合ファイル上は無印=tier0として扱われる)。
 // d(簡単な日本語の解説。例: りんご→「バラ科の樹木、およびその食用となる果実のこと」)は
 // mとは別枠の項目。script.js側はd があればdを、無ければ従来通りmを表示に使う。
+//
+// 同音異義語(読みが同じで表記・意味が異なる語、例: こうえん→公園/講演/後援)は
+// 積極的に採用する。しりとりは読み単位のゲームなので、以前は「1つの読みにつき
+// 語は1つだけ」に厳しく制限していたが、その結果「読みが偶然マイナーな語に
+// 先取りされたせいで、もっと簡単で有名な語が辞書に一切入らない」という問題が
+// 起きていた(script.js側はWORDSを単なる配列として扱っており、同じ読みの語が
+// 複数あっても何も問題は無い)。MAX_HOMONYMS_PER_READING件までは表記が異なる
+// 限り同じ読みでも別語として採用し、それを超えたら追加を打ち切る(無制限に
+// すると、読みが短くありふれた固有名詞などで際限なく積み上がってしまうため)。
+// 全く同じ表記+読みの組み合わせ(=本当の重複、複数カテゴリから同じ語が
+// 抽出された場合など)は、同音異義語ではないので引き続き1回しか採用しない。
+const MAX_HOMONYMS_PER_READING = 4;
 function addEntry(out, seenReadings, cap, { w, r, m, t, d }){
   if(!KANA_ONLY.test(r)) return false;
   if(r.length < 2) return false;
-  if(seenReadings.has(r)) return false;
+  const existing = seenReadings.get(r);
+  if(existing){
+    if(existing.has(w)) return false; // 表記まで同じ = 本当の重複
+    if(existing.size >= MAX_HOMONYMS_PER_READING) return false;
+  }
   if(out.length >= cap) return false;
-  seenReadings.add(r);
+  // ここまで来たら実際に追加が確定するので、ここで初めて記録する
+  // (cap超過で追加されない場合にまで同音異義語の枠を消費しないため)。
+  if(existing) existing.add(w);
+  else seenReadings.set(r, new Set([w]));
   const entry = { w, r, m };
   if(t) entry.t = t;
   if(d) entry.d = d;
@@ -1044,7 +1063,7 @@ async function main(){
   // Wikidataは神話・架空の存在/著名人について日本語の説明文を持つことが多く、
   // JMdict/JMnedictの単純な種別ラベルより情報量が多いため、読みが重複した場合は
   // Wikidata側を優先する(=先に登録する)順序にしている。
-  const seenReadings = new Set();
+  const seenReadings = new Map(); // 読み -> その読みで既に採用した表記(w)のSet
   const commonNouns = extractNouns(commonData, seenReadings);
   const proverbs = extractProverbsAndYoji(fullData, seenReadings);
   const fieldTerms = extractFieldTerms(fullData, seenReadings);
