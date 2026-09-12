@@ -54,6 +54,7 @@ import { parseTSV } from './tsv.js';
       requiredKana: null,      // null = 最初の一手は自由
       gameOver: false,
       turnRemaining: TURN_TIME_LIMIT,
+      aiTurnCount: 0,           // 辞書番がこれまでに打った手数(「ん」うっかり率を対局の長さに応じて上げるため)
       cards: [],                // 表示履歴(会話を切り替えて戻ってきたときに再描画するため)
     };
   }
@@ -451,8 +452,25 @@ import { parseTSV } from './tsv.js';
     return best;
   }
 
-  function pickAiMove(kana, strength){
-    const pool = candidatesFor(kana, usedReadings);
+  // 「やさしめ」「ふつう」では辞書番が選べる語彙そのものを絞る(=知らない語は言わない)。
+  // 上限が無いと辞書番は常に全375,000語超から最適に近い手を選べてしまい、こちらが
+  // どれだけ言葉を知っていても勝ち筋(相手の持ち駒を尽きさせる/「ん」に追い込む)が
+  // ほぼ存在しなかったため。t===1は有名な地名・人物・よく使われる一般名詞(約2万語)。
+  // 「やさしめ」はそこからさらに読みが4文字以下の短い語(=基本的な語が中心、約1.3万語)
+  // に絞る。dは簡単な解説が付いている語(有名語含め約11.5万語)。「めちゃ強い」だけ無制限。
+  const EASY_VOCAB = e => e.t === 1 && e.r.length <= 4;
+  const NORMAL_VOCAB = e => e.t === 1 || !!e.d;
+
+  // 語彙を絞るだけでは、対局が長く続いても辞書番が絶対に「ん」を選ばない(=自滅しない)
+  // ため、勝ち筋がほぼ「相手の持ち駒切れ」頼みになってしまう。そこで、安全な手がまだ
+  // 残っていても、対局が長引く(=辞書番の手数が増える)ほど少しずつ「ん」で終わる語を
+  // うっかり選んでしまう確率を上げる。全難易度共通の仕様(ユーザー要望)。
+  const N_MISTAKE_PER_TURN = 0.004; // 辞書番の1手ごとに+0.4%
+  const N_MISTAKE_MAX = 0.18;       // 上限18%(対局45手あたりで頭打ち)
+  function pickAiMove(kana, strength, aiTurnCount){
+    let pool = candidatesFor(kana, usedReadings);
+    if(strength === 'easy') pool = pool.filter(EASY_VOCAB);
+    else if(strength === 'normal') pool = pool.filter(NORMAL_VOCAB);
     if(pool.length === 0) return null;
 
     // 語彙が数万〜十万語規模になったため、ここでは概算値(kanaSizeApprox、使用済みを考慮しない
@@ -465,6 +483,11 @@ import { parseTSV } from './tsv.js';
     });
 
     const safe = scored.filter(s => !s.isN);
+    const nEnding = scored.filter(s => s.isN);
+    if(safe.length && nEnding.length){
+      const mistakeChance = Math.min(N_MISTAKE_MAX, (aiTurnCount || 0) * N_MISTAKE_PER_TURN);
+      if(Math.random() < mistakeChance) return weightedPick(nEnding);
+    }
     const usable = safe.length ? safe : scored; // 安全な手が無ければ「ん」で終わる手を仕方なく選ぶ(=辞書番の自滅)
 
     if(strength === 'easy'){
@@ -573,7 +596,8 @@ import { parseTSV } from './tsv.js';
     await new Promise(r => setTimeout(r, 1000));
     removeThinking();
 
-    const move = pickAiMove(conv.requiredKana, conv.strength);
+    conv.aiTurnCount++;
+    const move = pickAiMove(conv.requiredKana, conv.strength, conv.aiTurnCount);
     if(!move){
       const opts = acceptableStartKana(conv.requiredKana).map(k => '「'+k+'」').join('か');
       renderGameOver('user', '辞書番の持ち駒('+opts+'から始まる言葉)が尽きました。');
