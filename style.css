@@ -169,6 +169,10 @@ header{
 .belt-blue{background:#0A84FF; color:#fff;}
 .belt-brown{background:#8B5A2B; color:#fff;}
 .belt-black{background:#1C1C1E; color:#fff;}
+/* グループチャット/観戦(帯ランクの6人とは別枠の特別な相手)のアバター色。
+   belt-*と同じ理由(background宣言の後勝ち)でここに置く。 */
+.special-group{background:#8E5CE0; color:#fff;}
+.special-spectator{background:#FF9F43; color:#fff;}
 .medallion-label{
   font-size:12.5px; color:var(--ink-soft); margin-top:1px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -244,6 +248,23 @@ main{
 .card.ai .meaning{color:var(--ink-soft);}
 .card.user .meaning{color:rgba(255,255,255,.85);}
 .card .reason{margin-top:2px; font-size:12px; color:var(--danger);}
+/* グループチャット/観戦: 誰の発言か分かるよう、ふきだしの上に名前を出し、
+   ボットごとに色分けする(1対1では相手は辞書番だけなので使わない)。 */
+.sender-name{font-size:11px; font-weight:700; margin-bottom:3px; color:var(--ink-faint);}
+.card.botA .sender-name, .card.sBotA .sender-name{color:#4C8BF5;}
+.card.botB .sender-name, .card.sBotB .sender-name{color:#F5A623;}
+/* 参加者の脱落(まだ決着していない)を知らせる、中央寄せの小さな通知。 */
+.elimination-note{
+  align-self:center;
+  text-align:center;
+  font-size:12px;
+  color:var(--ink-soft);
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:6px 14px;
+  margin:2px 0;
+}
 .thinking-card{
   max-width:60%;
   padding:10px 15px;
@@ -279,6 +300,7 @@ main{
 }
 .gameover .result.win{color:var(--accent);}
 .gameover .result.lose{color:var(--danger);}
+.gameover .result.neutral{color:#4C8BF5;} /* 観戦(自分は不参加)で決着したときの中立色 */
 .gameover p{font-size:12px; color:var(--ink-soft); margin:4px 0 0;}
 .gameover .hint{display:inline-block; margin-top:6px; color:var(--accent); font-size:11.5px;}
 .input-bar{

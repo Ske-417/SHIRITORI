@@ -35,7 +35,8 @@ import { parseTSV } from './tsv.js';
     { strength:'hard',   timerOn:false, belt:'茶帯', beltClass:'brown'  },
     { strength:'hard',   timerOn:true,  belt:'黒帯', beltClass:'black'  },
   ];
-  const CONTACTS = RANKS.map(r => ({
+  const DUEL_CONTACTS = RANKS.map(r => ({
+    kind: 'duel',
     id: r.strength + '-' + (r.timerOn ? 'timer' : 'notimer'),
     strength: r.strength,
     timerOn: r.timerOn,
@@ -43,11 +44,54 @@ import { parseTSV } from './tsv.js';
     beltClass: r.beltClass,
     name: '辞書番【' + r.belt + '】',
   }));
+
+  // ---------------- グループチャット / AI観戦(2つの追加モード) ----------------
+  // 1対1の対局(duel)とは別に、複数人が同じ場で1本のしりとりをリレーする
+  // 「グループチャット」(自分+AI2体)と、自分は一切参加せずAI同士の対局を
+  // 眺めるだけの「観戦」を追加する。どちらも内部的には同じ「複数参加者が
+  // 順番に手番を回す」エンジン(participants/order/turnCursor/eliminated)を使う。
+  const GROUP_BOTS = [
+    { id:'botA', name:'辞書猫', strength:'normal', avatarClass:'bot-a', avatarChar:'猫' },
+    { id:'botB', name:'辞書犬', strength:'hard',   avatarClass:'bot-b', avatarChar:'犬' },
+  ];
+  const SPECTATOR_BOTS = [
+    { id:'sBotA', name:'白帯AI', strength:'easy', avatarClass:'bot-a', avatarChar:'白' },
+    { id:'sBotB', name:'黒帯AI', strength:'hard', avatarClass:'bot-b', avatarChar:'黒' },
+  ];
+  const SPECIAL_CONTACTS = [
+    { kind:'group', id:'group', name:'みんなでしりとり', beltClass:'group', avatarChar:'群', bots: GROUP_BOTS },
+    { kind:'spectator', id:'spectator', name:'AI同士の観戦', beltClass:'spectator', avatarChar:'観', bots: SPECTATOR_BOTS },
+  ];
+
+  const CONTACTS = [...DUEL_CONTACTS, ...SPECIAL_CONTACTS];
   const CONTACTS_BY_ID = new Map(CONTACTS.map(c => [c.id, c]));
 
   const TURN_TIME_LIMIT = 60; // 秒(強さに関わらず一律)
   function freshConversationState(contact){
+    if(contact.kind === 'group' || contact.kind === 'spectator'){
+      const participants = [];
+      // グループチャットは必ず自分(user)を先頭にする(=最初の一手はいつも自分から。
+      // AIが自由な一手目を選ぶロジックを別途用意せずに済む)。観戦はAI同士のみ。
+      if(contact.kind === 'group') participants.push({ id:'user', kind:'user', name:'あなた', avatarClass:'user' });
+      for(const b of contact.bots){
+        participants.push({ id:b.id, kind:'ai', name:b.name, strength:b.strength, avatarClass:b.avatarClass, avatarChar:b.avatarChar, aiTurnCount:0 });
+      }
+      return {
+        kind: contact.kind,
+        participants,
+        order: participants.map(p => p.id), // 固定の巡回順(脱落者はeliminatedで読み飛ばす)
+        turnCursor: 0,
+        eliminated: new Set(),
+        winnerId: null,
+        usedReadings: new Set(),
+        requiredKana: null,
+        gameOver: false,
+        autoplayTimer: null, // 観戦モードの自動進行タイマー(会話を離れたら止める)
+        cards: [],
+      };
+    }
     return {
+      kind: 'duel',
       strength: contact.strength,
       timerOn: contact.timerOn,
       usedReadings: new Set(), // これまでに場に出た「読み」(ユーザー・AI問わず)
@@ -135,20 +179,28 @@ import { parseTSV } from './tsv.js';
     appEl.classList.toggle('screen-chat', name === 'chat');
   }
   const BELT_CLASSES = RANKS.map(r => 'belt-' + r.beltClass);
+  const SPECIAL_CLASSES = SPECIAL_CONTACTS.map(c => 'special-' + c.beltClass);
   function updateChatHeader(){
     const c = CONTACTS_BY_ID.get(activeId);
     chatNameEl.textContent = c.name;
-    // ヘッダーのアバター(medallion)も、選んでいる相手の帯の色に合わせる。
-    medallion.classList.remove(...BELT_CLASSES);
-    medallion.classList.add('belt-' + c.beltClass);
+    // ヘッダーのアバター(medallion)も、選んでいる相手の帯の色(グループ/観戦は専用の色)に合わせる。
+    medallion.classList.remove(...BELT_CLASSES, ...SPECIAL_CLASSES);
+    medallion.classList.add(c.kind === 'duel' ? 'belt-' + c.beltClass : 'special-' + c.beltClass);
   }
   // medallionLabelは、チャット相手(辞書番)の名前の下にある「オンライン状態」の
   // ようなステータステキストとして表示する(メッセンジャーアプリの見た目に
-  // 合わせるため、対局の進行状況をここに集約している)。
+  // 合わせるため、対局の進行状況をここに集約している)。グループ/観戦では
+  // 「誰の番か」も併せて表示する(1対1と違い、次が自分の番とは限らないため)。
   function updateMedallion(){
     const conv = active();
     medallion.classList.remove('multi');
-    if(conv.gameOver){ medallion.textContent = '終'; medallionLabel.textContent = '対局終了'; return; }
+    if(conv.gameOver){
+      medallion.textContent = '終';
+      if(conv.kind === 'duel'){ medallionLabel.textContent = '対局終了'; return; }
+      const winner = participantById(conv, conv.winnerId);
+      medallionLabel.textContent = winner ? ((winner.kind==='user'?'あなた':winner.name) + 'の勝ち') : '対局終了';
+      return;
+    }
     if(!conv.requiredKana){ medallion.textContent = '―'; medallionLabel.textContent = '最初のことばへ'; return; }
     const opts = acceptableStartKana(conv.requiredKana);
     if(opts.length > 1){
@@ -157,7 +209,13 @@ import { parseTSV } from './tsv.js';
     }else{
       medallion.textContent = conv.requiredKana;
     }
-    medallionLabel.textContent = '「' + conv.requiredKana + '」から始めてください';
+    if(conv.kind === 'duel'){
+      medallionLabel.textContent = '「' + conv.requiredKana + '」から始めてください';
+    }else{
+      const turnP = currentParticipant(conv);
+      const who = turnP ? (turnP.kind==='user' ? 'あなた' : turnP.name) : '';
+      medallionLabel.textContent = '「' + conv.requiredKana + '」から(' + who + 'の番)';
+    }
   }
   // d(簡単な解説)があればそれを表示に使い、無ければ従来のm(種別ラベル/英語glossなど)に
   // フォールバックする。dはまだ全語には付いていないため、この関数を通して常に安全に読む。
@@ -173,10 +231,22 @@ import { parseTSV } from './tsv.js';
   }
 
   // カードのDOM構築だけを行う純粋な関数(履歴からの再描画にも使うため、
-  // 「会話に記録する」処理とは分離してある)。
-  function buildCardEl({word, reading, meaning, by, invalid, reason, requiredWasSet}){
+  // 「会話に記録する」処理とは分離してある)。by は 'user' か、それ以外は
+  // すべて「相手」側(左・白ふきだし)として扱う。グループ/観戦では by に
+  // 参加者ID(botA等)を渡すことで、ボットごとの色分け(CSS)も可能にする。
+  // senderNameを渡すと、ふきだしの上に発言者名を表示する(グループ/観戦用。
+  // 1対1では相手が辞書番だけなので省略する)。
+  function buildCardEl({word, reading, meaning, by, invalid, reason, requiredWasSet, senderName}){
     const card = document.createElement('div');
-    card.className = 'card ' + by + (invalid ? ' invalid' : '');
+    const isUser = by === 'user';
+    const cls = isUser ? 'user' : (by === 'ai' ? 'ai' : 'ai ' + by);
+    card.className = 'card ' + cls + (invalid ? ' invalid' : '');
+    if(senderName){
+      const nameEl = document.createElement('div');
+      nameEl.className = 'sender-name';
+      nameEl.textContent = senderName;
+      card.appendChild(nameEl);
+    }
     if(!invalid){
       const wordRow = document.createElement('div');
       wordRow.className = 'word-row';
@@ -206,6 +276,27 @@ import { parseTSV } from './tsv.js';
     el.appendChild(result); el.appendChild(p);
     return el;
   }
+  // グループ/観戦用の勝敗表示。参加者が3人以上いる/自分が参加していない
+  // 場合もあるため、勝った側の名前をそのまま表示する(win/lose二択ではない)。
+  // humanWon: true=自分の勝ち(緑) false=自分が勝てなかった(赤・グループのみ)
+  // null=そもそも自分は参加していない(観戦、水色・中立)。
+  function buildMultiGameOverEl({winnerName, humanWon, note}){
+    const el = document.createElement('div');
+    el.className = 'gameover';
+    const result = document.createElement('div');
+    result.className = 'result ' + (humanWon === true ? 'win' : humanWon === false ? 'lose' : 'neutral');
+    result.textContent = winnerName ? (winnerName + 'の勝ち') : '引き分け';
+    const p = document.createElement('p');
+    p.innerHTML = note;
+    el.appendChild(result); el.appendChild(p);
+    return el;
+  }
+  function buildEliminationEl(text){
+    const el = document.createElement('div');
+    el.className = 'elimination-note';
+    el.textContent = text;
+    return el;
+  }
 
   function renderCard(data){
     active().cards.push({ kind:'card', ...data });
@@ -215,11 +306,14 @@ import { parseTSV } from './tsv.js';
     scrollToBottom();
     renderContactList(); // 一覧側の「最後のメッセージ」プレビューを更新する
   }
-  function renderThinking(by){
+  // by: 'user'(=受理中) か 'ai'(=考え中)。nameを渡すと「◯◯、考え中」のように
+  // 発言者名を出す(グループ/観戦用。省略時は従来通り「辞書番、考え中」)。
+  function renderThinking(by, name){
     const el = document.createElement('div');
     el.className = 'thinking-card ' + by;
     el.id = 'thinkingCard';
-    el.innerHTML = (by==='ai' ? '辞書番、考え中' : '受理中') + '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    const label = by === 'ai' ? (name || '辞書番') + '、考え中' : '受理中';
+    el.innerHTML = label + '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
     chainEl.appendChild(el); scrollToBottom();
   }
   function removeThinking(){ const el = document.getElementById('thinkingCard'); if(el) el.remove(); }
@@ -229,15 +323,44 @@ import { parseTSV } from './tsv.js';
     scrollToBottom();
     renderContactList();
   }
+  function renderMultiGameOver(conv, winnerParticipant, note){
+    const humanExists = conv.participants.some(p => p.kind === 'user');
+    const humanWon = humanExists ? (!!winnerParticipant && winnerParticipant.kind === 'user') : null;
+    const data = {
+      kind: 'gameover', multi: true,
+      winnerId: winnerParticipant ? winnerParticipant.id : null,
+      winnerName: winnerParticipant ? (winnerParticipant.kind==='user' ? 'あなた' : winnerParticipant.name) : null,
+      humanWon, note,
+    };
+    conv.cards.push(data);
+    chainEl.appendChild(buildMultiGameOverEl(data));
+    scrollToBottom();
+    renderContactList();
+  }
+  function renderElimination(conv, text){
+    conv.cards.push({ kind:'elimination', text });
+    chainEl.appendChild(buildEliminationEl(text));
+    scrollToBottom();
+    renderContactList();
+  }
   // 会話を切り替えたとき、保存しておいた履歴からチャットログを丸ごと再構築する。
   function renderChainFromHistory(conv){
     chainEl.innerHTML = '';
     if(conv.cards.length === 0){
-      chainEl.innerHTML = '<div class="empty-hint" id="emptyHint"><div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。</div>';
+      const hint = conv.kind === 'spectator'
+        ? '<div class="kanban-mini">— 観戦 —</div>まもなくAI同士の対局が始まります。ながめていてください。'
+        : conv.kind === 'group'
+          ? '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。自分の番になると入力欄が使えます。<br>読みが「ん」で終わったら、その場で脱落です。'
+          : '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。';
+      chainEl.innerHTML = '<div class="empty-hint" id="emptyHint">' + hint + '</div>';
       return;
     }
     for(const item of conv.cards){
-      chainEl.appendChild(item.kind === 'card' ? buildCardEl(item) : buildGameOverEl(item));
+      let el;
+      if(item.kind === 'card') el = buildCardEl(item);
+      else if(item.kind === 'elimination') el = buildEliminationEl(item.text);
+      else el = item.multi ? buildMultiGameOverEl(item) : buildGameOverEl(item);
+      chainEl.appendChild(el);
     }
     scrollToBottom();
   }
@@ -246,8 +369,14 @@ import { parseTSV } from './tsv.js';
   function contactPreview(conv){
     for(let i = conv.cards.length - 1; i >= 0; i--){
       const item = conv.cards[i];
-      if(item.kind === 'gameover') return item.winner === 'user' ? 'あなたの勝ち' : '辞書番の勝ち';
-      if(item.kind === 'card' && !item.invalid) return (item.by === 'user' ? 'あなた: ' : '辞書番: ') + item.word;
+      if(item.kind === 'gameover'){
+        if(item.multi) return item.winnerName ? (item.winnerName + 'の勝ち') : '引き分け';
+        return item.winner === 'user' ? 'あなたの勝ち' : '辞書番の勝ち';
+      }
+      if(item.kind === 'card' && !item.invalid){
+        const label = item.by === 'user' ? 'あなた' : (item.senderName || '辞書番');
+        return label + ': ' + item.word;
+      }
     }
     return 'まだ対局していません';
   }
@@ -260,8 +389,8 @@ import { parseTSV } from './tsv.js';
       row.className = 'contact-row' + (c.id === activeId ? ' active' : '');
 
       const avatar = document.createElement('div');
-      avatar.className = 'contact-avatar belt-' + c.beltClass;
-      avatar.textContent = '辞';
+      avatar.className = 'contact-avatar ' + (c.kind === 'duel' ? 'belt-' + c.beltClass : 'special-' + c.beltClass);
+      avatar.textContent = c.kind === 'duel' ? '辞' : c.avatarChar;
 
       const info = document.createElement('div');
       info.className = 'contact-info';
@@ -273,12 +402,14 @@ import { parseTSV } from './tsv.js';
       nameEl.textContent = c.name;
       const badge = document.createElement('span');
       badge.className = 'contact-badge';
-      badge.textContent = STRENGTH_LABELS[c.strength];
+      badge.textContent = c.kind === 'duel' ? STRENGTH_LABELS[c.strength] : (c.kind === 'group' ? '3人' : '観戦');
       nameRow.appendChild(nameEl); nameRow.appendChild(badge);
 
       const meta = document.createElement('div');
       meta.className = 'contact-meta';
-      meta.textContent = c.timerOn ? '持ち時間60秒' : '持ち時間なし';
+      meta.textContent = c.kind === 'duel'
+        ? (c.timerOn ? '持ち時間60秒' : '持ち時間なし')
+        : (c.kind === 'group' ? 'あなた + AI2体' : 'AI2体の対局を観戦');
 
       const preview = document.createElement('div');
       preview.className = 'contact-preview';
@@ -290,11 +421,22 @@ import { parseTSV } from './tsv.js';
       contactsEl.appendChild(row);
     }
   }
+  // 観戦(AI同士)は会話を離れている間、自動進行を止める(戻ってきたときに
+  // resumeSpectatorIfNeededで再開する)。停止済みのタイマーを二重にクリアしても
+  // 害は無いので、離れる会話がobservationか気にせず毎回呼んでよい。
+  function pauseSpectatorAutoplay(conv){
+    if(conv.autoplayTimer){ clearTimeout(conv.autoplayTimer); conv.autoplayTimer = null; }
+  }
+  function resumeSpectatorIfNeeded(id, conv){
+    if(conv.kind === 'spectator' && !conv.gameOver) scheduleSpectatorStep(id);
+  }
   function selectContact(id){
     if(busy) return; // ターン処理中の切り替えは禁止(処理中の会話が宙に浮くのを避ける)
     if(id !== activeId){
       pauseTurnTimer();
-      active().turnRemaining = turnRemaining; // 現在の残り時間を出て行く会話側に保存
+      const leaving = active();
+      leaving.turnRemaining = turnRemaining; // 現在の残り時間を出て行く会話側に保存
+      pauseSpectatorAutoplay(leaving);
 
       activeId = id;
       const conv = active();
@@ -308,6 +450,7 @@ import { parseTSV } from './tsv.js';
       if(!conv.gameOver && conv.requiredKana) resumeTurnTimer();
       else clearTurnTimer();
       renderContactList();
+      resumeSpectatorIfNeeded(id, conv);
     }
     showScreen('chat');
     inputEl.focus();
@@ -315,6 +458,7 @@ import { parseTSV } from './tsv.js';
   function restartAll(){
     if(busy) return;
     pauseTurnTimer();
+    for(const conv of conversations.values()) pauseSpectatorAutoplay(conv);
     conversations = new Map(CONTACTS.map(c => [c.id, freshConversationState(c)]));
     const conv = active();
     usedReadings = conv.usedReadings;
@@ -325,6 +469,7 @@ import { parseTSV } from './tsv.js';
     setBusy(false);
     clearTurnTimer();
     renderContactList();
+    resumeSpectatorIfNeeded(activeId, conv);
     inputEl.focus();
   }
 
@@ -527,13 +672,175 @@ import { parseTSV } from './tsv.js';
     return weightedPick(nearBest);
   }
 
+  // requiredKanaがまだ無い「自由な一手目」をAIが打つ場合の手選び(グループ/観戦で、
+  // 巡回順の先頭がAIになりうる観戦モード用)。1手目は先読みするような危険が無いので
+  // pickAiMoveの複雑な分岐は使わず、語彙(強さ)フィルタ+重み付き抽選だけで選ぶ。
+  function pickAiOpeningMove(strength){
+    let pool = WORDS.filter(e => !usedReadings.has(e.r));
+    if(strength === 'easy') pool = pool.filter(EASY_VOCAB);
+    else if(strength === 'normal') pool = pool.filter(NORMAL_VOCAB);
+    if(pool.length === 0) return null;
+    const scored = pool.map(e => {
+      const end = analyzeEnding(e.r);
+      return { e, end, isN: end.isN };
+    });
+    const safe = scored.filter(s => !s.isN);
+    return weightedPick(safe.length ? safe : scored);
+  }
+
+  // ---------------- グループチャット/観戦の共通エンジン ----------------
+  // 参加者(2人以上)が固定の順番で手番を回し、「ん」で終わった・持ち駒が尽きた
+  // 参加者はその場で脱落、最後の1人が残るまで続ける。1対1(duel)は従来通り
+  // 専用のhandleSubmitで扱うため、ここは触らない。
+  function participantById(conv, id){
+    return conv.participants.find(p => p.id === id);
+  }
+  function currentParticipant(conv){
+    return participantById(conv, conv.order[conv.turnCursor]);
+  }
+  function advanceTurn(conv){
+    const n = conv.order.length;
+    for(let i = 0; i < n; i++){
+      conv.turnCursor = (conv.turnCursor + 1) % n;
+      if(!conv.eliminated.has(conv.order[conv.turnCursor])) return;
+    }
+  }
+  function eliminateParticipant(conv, participant){
+    conv.eliminated.add(participant.id);
+    const remaining = conv.participants.filter(p => !conv.eliminated.has(p.id));
+    if(remaining.length <= 1){
+      conv.gameOver = true;
+      conv.winnerId = remaining[0] ? remaining[0].id : null;
+    }
+  }
+  // 脱落が出た直後の共通処理: それで決着が付けば勝敗カードを、まだ複数人
+  // 残っていれば「脱落しました」の小さな通知カードを出して手番を進める。
+  function finishMultiTurnAfterElimination(conv, reasonText){
+    if(conv.gameOver){
+      renderMultiGameOver(conv, participantById(conv, conv.winnerId), reasonText);
+    }else{
+      renderElimination(conv, reasonText);
+      advanceTurn(conv);
+    }
+  }
+  // resolved({word,reading,meaning})を参加者participantの一手として場に適用する。
+  // 人間の入力・AIの手のどちらから呼んでも同じ脱落/進行ロジックを通る。
+  function applyMultiMove(conv, participant, resolved){
+    usedReadings.add(resolved.reading);
+    const who = participant.kind === 'user' ? 'あなた' : participant.name;
+    renderCard({
+      word: resolved.word, reading: resolved.reading, meaning: resolved.meaning,
+      by: participant.id, senderName: participant.kind === 'user' ? null : participant.name,
+      requiredWasSet: !!conv.requiredKana,
+    });
+    const ending = analyzeEnding(resolved.reading);
+    if(ending.isN){
+      eliminateParticipant(conv, participant);
+      finishMultiTurnAfterElimination(conv, who + 'の言葉の読みが「ん」で終わりました。');
+      return;
+    }
+    conv.requiredKana = ending.kana;
+    advanceTurn(conv);
+  }
+  // AI参加者1人分の手番をまるごと処理する(考え中表示→手を選ぶ→反映)。
+  async function runOneAiTurn(conv, participant){
+    renderThinking('ai', participant.name);
+    await new Promise(r => setTimeout(r, 900));
+    removeThinking();
+    participant.aiTurnCount = (participant.aiTurnCount || 0) + 1;
+    const move = conv.requiredKana
+      ? pickAiMove(conv.requiredKana, participant.strength, participant.aiTurnCount)
+      : pickAiOpeningMove(participant.strength);
+    if(!move){
+      eliminateParticipant(conv, participant);
+      finishMultiTurnAfterElimination(conv, participant.name + 'の持ち駒が尽きました。');
+      return;
+    }
+    usedReadings.add(move.e.r);
+    applyMultiMove(conv, participant, { word: move.e.w, reading: move.e.r, meaning: entryMeaning(move.e) });
+  }
+  // 自分の手番が終わった後、次がAIの間は自動で打たせ続け、自分の番が
+  // 回ってくる(か対局が終わる)まで待つ(グループチャット用)。
+  async function continueGroupLoop(conv){
+    while(!conv.gameOver){
+      const p = currentParticipant(conv);
+      if(!p || p.kind === 'user') break;
+      await runOneAiTurn(conv, p);
+      updateMedallion();
+    }
+  }
+  async function handleGroupSubmit(){
+    const conv = active();
+    if(conv.kind !== 'group' || busy || conv.gameOver) return;
+    const participant = currentParticipant(conv);
+    if(!participant || participant.kind !== 'user') return; // 自分の番でなければ何もしない(念のため)
+    const val = inputEl.value.trim();
+    if(!val) return;
+    inputEl.value = '';
+    setBusy(true);
+    renderThinking('user');
+    await new Promise(r => setTimeout(r, 200));
+    removeThinking();
+
+    const resolved = resolveUserWord(val);
+    if(!resolved){
+      renderCard({word: val, invalid:true, reason:'読みが特定できません。ひらがな/カタカナで入力してください', by:'user'});
+      setBusy(false); return;
+    }
+    if(conv.requiredKana && !acceptableStartKana(conv.requiredKana).includes(startKana(resolved.reading))){
+      const opts = acceptableStartKana(conv.requiredKana).map(k => '「'+k+'」').join('か');
+      renderCard({word: resolved.word, invalid:true, reason: opts+'から始まっていません', by:'user'});
+      setBusy(false); return;
+    }
+    if(usedReadings.has(resolved.reading)){
+      renderCard({word: resolved.word, invalid:true, reason:'その言葉はすでに使われています', by:'user'});
+      setBusy(false); return;
+    }
+
+    applyMultiMove(conv, participant, resolved);
+    updateMedallion();
+    if(!conv.gameOver) await continueGroupLoop(conv);
+    updateMedallion();
+    setBusy(false);
+    if(!conv.gameOver) inputEl.focus();
+  }
+
+  // 観戦モード: 自分の入力を待たず、一定間隔で自動的にAI同士の手番を進め続ける。
+  // このタブを見ている間だけ進行し、離れたら止まる(selectContact側でpause/resume)。
+  function scheduleSpectatorStep(id){
+    const conv = conversations.get(id);
+    if(!conv || conv.gameOver) return;
+    pauseSpectatorAutoplay(conv);
+    conv.autoplayTimer = setTimeout(() => runSpectatorStep(id), 700);
+  }
+  async function runSpectatorStep(id){
+    if(activeId !== id) return; // その間に別のトークへ移動していたら何もしない
+    const conv = conversations.get(id);
+    if(!conv || conv.gameOver) return;
+    setBusy(true);
+    const p = currentParticipant(conv);
+    await runOneAiTurn(conv, p);
+    updateMedallion();
+    setBusy(false);
+    if(activeId === id && !conv.gameOver) scheduleSpectatorStep(id);
+  }
+
   // 持ち時間の制御はここでは行わない(呼び出し側で意図に応じて
   // startTurnTimer/pauseTurnTimer/resumeTurnTimer/clearTurnTimerを使い分ける)。
+  // グループチャットでは自分の番のときだけ、観戦では常に入力欄を無効にする。
   function setBusy(v){
     busy = v;
-    const gameOver = active().gameOver;
-    inputEl.disabled = v || gameOver;
-    submitBtn.disabled = v || gameOver;
+    const conv = active();
+    const gameOver = conv.gameOver;
+    let humanTurn = true;
+    if(conv.kind === 'group') humanTurn = !!currentParticipant(conv) && currentParticipant(conv).kind === 'user';
+    else if(conv.kind === 'spectator') humanTurn = false;
+    const disabled = v || gameOver || !humanTurn;
+    inputEl.disabled = disabled;
+    submitBtn.disabled = disabled;
+    inputEl.placeholder = conv.kind === 'spectator'
+      ? 'AI同士が対局中です(観戦専用)'
+      : (conv.kind === 'group' && !gameOver && !humanTurn ? (currentParticipant(conv).name + 'の番です…') : 'ことばを入力…');
   }
 
   // 制限時間(強さに関わらず一律 TURN_TIME_LIMIT 秒)以内に入力できなかった場合の即負け。
@@ -549,7 +856,7 @@ import { parseTSV } from './tsv.js';
     }
     updateMedallion();
     renderGameOver('ai', note);
-    setBusy(true);
+    setBusy(false); // gameOver自体がinputを無効化するので、busyは戻して他トークへの移動を可能にする
   }
 
   async function handleSubmit(){
@@ -587,7 +894,7 @@ import { parseTSV } from './tsv.js';
     if(ending.isN){
       conv.gameOver = true; updateMedallion();
       renderGameOver('ai', 'あなたの言葉の読みが「ん」で終わりました。');
-      setBusy(true); clearTurnTimer(); return;
+      setBusy(false); clearTurnTimer(); return; // gameOver自体がinputを無効化するので、busyは戻して他トークへの移動を可能にする
     }
     conv.requiredKana = ending.kana;
     updateMedallion();
@@ -601,7 +908,7 @@ import { parseTSV } from './tsv.js';
     if(!move){
       const opts = acceptableStartKana(conv.requiredKana).map(k => '「'+k+'」').join('か');
       renderGameOver('user', '辞書番の持ち駒('+opts+'から始まる言葉)が尽きました。');
-      conv.gameOver = true; updateMedallion(); setBusy(true); clearTurnTimer(); return;
+      conv.gameOver = true; updateMedallion(); setBusy(false); clearTurnTimer(); return;
     }
     usedReadings.add(move.e.r);
     renderCard({word: move.e.w, reading: move.e.r, meaning: entryMeaning(move.e), by:'ai', requiredWasSet:true});
@@ -610,13 +917,20 @@ import { parseTSV } from './tsv.js';
     if(move.isN){
       conv.gameOver = true; updateMedallion();
       renderGameOver('user', '辞書番が読みが「ん」で終わる言葉を選ばざるを得ませんでした。');
-      setBusy(true); clearTurnTimer(); return;
+      setBusy(false); clearTurnTimer(); return;
     }
     conv.requiredKana = move.end.kana;
     updateMedallion();
     setBusy(false);
     startTurnTimer(); // ここからがあなたの新しい手番なので、持ち時間を60秒に戻す
     inputEl.focus();
+  }
+  // 送信ボタン/Enterの実処理を、今アクティブな会話の種類ごとに振り分ける。
+  function handleSubmitDispatch(){
+    const conv = active();
+    if(conv.kind === 'group') return handleGroupSubmit();
+    if(conv.kind === 'spectator') return; // 観戦モードは入力欄自体が常に無効(念のためのガード)
+    return handleSubmit();
   }
 
   // words-core.tsv(手作業・日本語の意味つき)と words-auto.tsv(自動取得分)を
@@ -653,15 +967,16 @@ import { parseTSV } from './tsv.js';
     renderChainFromHistory(active());
     clearTurnTimer();
     setBusy(false);
+    resumeSpectatorIfNeeded(activeId, active());
   }
 
-  submitBtn.addEventListener('click', handleSubmit);
+  submitBtn.addEventListener('click', handleSubmitDispatch);
   // IME変換確定のEnterでも submit してしまわないよう、変換中(isComposing/keyCode 229)は無視する。
   // これにより「変換確定のEnter」と「送信のEnter」が別の操作として扱われる。
   inputEl.addEventListener('keydown', e => {
     if(e.key !== 'Enter') return;
     if(e.isComposing || e.keyCode === 229) return;
-    handleSubmit();
+    handleSubmitDispatch();
   });
   restartAllBtn.addEventListener('click', restartAll);
   backBtn.addEventListener('click', () => showScreen('list'));
