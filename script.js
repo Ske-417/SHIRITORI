@@ -47,20 +47,23 @@ import { parseTSV } from './tsv.js';
 
   // ---------------- グループチャット / AI観戦(2つの追加モード) ----------------
   // 1対1の対局(duel)とは別に、複数人が同じ場で1本のしりとりをリレーする
-  // 「グループチャット」(自分+AI2体)と、自分は一切参加せずAI同士の対局を
-  // 眺めるだけの「観戦」を追加する。どちらも内部的には同じ「複数参加者が
-  // 順番に手番を回す」エンジン(participants/order/turnCursor/eliminated)を使う。
+  // 「グループチャット」(自分+AI2体、固定メンバー)と、自分は一切参加せず
+  // AI同士の対局を眺めるだけの「観戦」(対戦相手は6段階の帯ランクから毎回
+  // 選べる、同じ帯同士の対戦も可)を追加する。どちらも内部的には同じ
+  // 「複数参加者が順番に手番を回す」エンジン(participants/order/turnCursor/
+  // eliminated)を使う。
   const GROUP_BOTS = [
     { id:'botA', name:'辞書猫', strength:'normal', avatarClass:'bot-a', avatarChar:'猫' },
     { id:'botB', name:'辞書犬', strength:'hard',   avatarClass:'bot-b', avatarChar:'犬' },
   ];
-  const SPECTATOR_BOTS = [
-    { id:'sBotA', name:'白帯AI', strength:'easy', avatarClass:'bot-a', avatarChar:'白' },
-    { id:'sBotB', name:'黒帯AI', strength:'hard', avatarClass:'bot-b', avatarChar:'黒' },
-  ];
+  // 観戦の対戦相手候補。1対1(duel)と同じ6段階の帯ランクをそのまま流用する
+  // (持ち時間の有無はAIの強さに影響しないため、強さが同じ帯が2つ実質重複
+  // することになるが、「どの帯として観戦したいか」という気分の問題なので
+  // あえて6つとも選べるようにしてある)。
+  const BELT_FIGHTERS = RANKS.map(r => ({ id: 'belt-' + r.beltClass, belt: r.belt, strength: r.strength, beltClass: r.beltClass }));
   const SPECIAL_CONTACTS = [
     { kind:'group', id:'group', name:'みんなでしりとり', beltClass:'group', avatarChar:'群', bots: GROUP_BOTS },
-    { kind:'spectator', id:'spectator', name:'AI同士の観戦', beltClass:'spectator', avatarChar:'観', bots: SPECTATOR_BOTS },
+    { kind:'spectator', id:'spectator', name:'AI同士の観戦', beltClass:'spectator', avatarChar:'観' },
   ];
 
   const CONTACTS = [...DUEL_CONTACTS, ...SPECIAL_CONTACTS];
@@ -68,16 +71,15 @@ import { parseTSV } from './tsv.js';
 
   const TURN_TIME_LIMIT = 60; // 秒(強さに関わらず一律)
   function freshConversationState(contact){
-    if(contact.kind === 'group' || contact.kind === 'spectator'){
-      const participants = [];
-      // グループチャットは必ず自分(user)を先頭にする(=最初の一手はいつも自分から。
-      // AIが自由な一手目を選ぶロジックを別途用意せずに済む)。観戦はAI同士のみ。
-      if(contact.kind === 'group') participants.push({ id:'user', kind:'user', name:'あなた', avatarClass:'user' });
+    if(contact.kind === 'group'){
+      // 自分(user)を必ず先頭にする(=最初の一手はいつも自分から。AIが自由な
+      // 一手目を選ぶロジックを別途用意せずに済む)。
+      const participants = [{ id:'user', kind:'user', name:'あなた', avatarClass:'user' }];
       for(const b of contact.bots){
         participants.push({ id:b.id, kind:'ai', name:b.name, strength:b.strength, avatarClass:b.avatarClass, avatarChar:b.avatarChar, aiTurnCount:0 });
       }
       return {
-        kind: contact.kind,
+        kind: 'group',
         participants,
         order: participants.map(p => p.id), // 固定の巡回順(脱落者はeliminatedで読み飛ばす)
         turnCursor: 0,
@@ -86,6 +88,25 @@ import { parseTSV } from './tsv.js';
         usedReadings: new Set(),
         requiredKana: null,
         gameOver: false,
+        cards: [],
+      };
+    }
+    if(contact.kind === 'spectator'){
+      // 対戦相手(帯)をまだ選んでいない状態で始まる。started=falseの間は
+      // participants/orderが空のままで、ピッカーUIで選ぶとstartSpectatorMatch()
+      // が組み立てる。
+      return {
+        kind: 'spectator',
+        participants: [],
+        order: [],
+        turnCursor: 0,
+        eliminated: new Set(),
+        winnerId: null,
+        usedReadings: new Set(),
+        requiredKana: null,
+        gameOver: false,
+        started: false,
+        lastPickA: null, lastPickB: null, // 選び直すときに前回の選択を初期値にする
         autoplayTimer: null, // 観戦モードの自動進行タイマー(会話を離れたら止める)
         cards: [],
       };
@@ -194,6 +215,11 @@ import { parseTSV } from './tsv.js';
   function updateMedallion(){
     const conv = active();
     medallion.classList.remove('multi');
+    if(conv.kind === 'spectator' && !conv.started){
+      medallion.textContent = '?';
+      medallionLabel.textContent = '対戦相手を選んでください';
+      return;
+    }
     if(conv.gameOver){
       medallion.textContent = '終';
       if(conv.kind === 'duel'){ medallionLabel.textContent = '対局終了'; return; }
@@ -334,6 +360,7 @@ import { parseTSV } from './tsv.js';
     };
     conv.cards.push(data);
     chainEl.appendChild(buildMultiGameOverEl(data));
+    if(conv.kind === 'spectator') chainEl.appendChild(buildSpectatorSetupEl(conv)); // すぐに選び直せるように
     scrollToBottom();
     renderContactList();
   }
@@ -343,15 +370,84 @@ import { parseTSV } from './tsv.js';
     scrollToBottom();
     renderContactList();
   }
+  // 観戦モードの「対戦相手(帯)を選ぶ」ピッカー。まだ対局を始めていない
+  // ときと、1本終わった後(もう一度選び直せるように)の両方で使う。
+  function buildSpectatorSetupEl(conv){
+    const wrap = document.createElement('div');
+    wrap.className = 'spectator-setup';
+    const title = document.createElement('div');
+    title.className = 'spectator-setup-title';
+    title.textContent = conv.gameOver ? 'もう一度、対戦相手を選ぶ' : '対戦相手を選んでください';
+    wrap.appendChild(title);
+
+    const row = document.createElement('div');
+    row.className = 'spectator-setup-row';
+    const selA = document.createElement('select');
+    const selB = document.createElement('select');
+    for(const f of BELT_FIGHTERS){
+      const label = f.belt + 'AI(' + STRENGTH_LABELS[f.strength] + ')';
+      const optA = document.createElement('option'); optA.value = f.id; optA.textContent = label;
+      selA.appendChild(optA);
+      const optB = document.createElement('option'); optB.value = f.id; optB.textContent = label;
+      selB.appendChild(optB);
+    }
+    selA.value = conv.lastPickA || BELT_FIGHTERS[0].id;
+    selB.value = conv.lastPickB || BELT_FIGHTERS[BELT_FIGHTERS.length - 1].id;
+    const vs = document.createElement('span');
+    vs.className = 'spectator-setup-vs';
+    vs.textContent = 'VS';
+    row.appendChild(selA); row.appendChild(vs); row.appendChild(selB);
+    wrap.appendChild(row);
+
+    const note = document.createElement('div');
+    note.className = 'spectator-setup-note';
+    note.textContent = '同じ帯同士の対戦もできます。';
+    wrap.appendChild(note);
+
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'spectator-setup-start';
+    startBtn.textContent = 'この対局を見る';
+    startBtn.addEventListener('click', () => startSpectatorMatch(conv, selA.value, selB.value));
+    wrap.appendChild(startBtn);
+    return wrap;
+  }
+  // 選ばれた2つの帯からAI2体を組み立て、観戦の会話を一から始める。
+  // ボタンは会話を見ている間しか押せないので、activeId=conv自身のIDとして
+  // 良い(usedReadingsショートカットの張り替えなどをそのまま行える)。
+  function startSpectatorMatch(conv, idA, idB){
+    const defA = BELT_FIGHTERS.find(f => f.id === idA) || BELT_FIGHTERS[0];
+    const defB = BELT_FIGHTERS.find(f => f.id === idB) || BELT_FIGHTERS[BELT_FIGHTERS.length - 1];
+    conv.lastPickA = defA.id; conv.lastPickB = defB.id;
+    const pA = { id:'fighterA', kind:'ai', name: defA.belt + 'AI(先手)', strength: defA.strength, beltClass: defA.beltClass, aiTurnCount:0 };
+    const pB = { id:'fighterB', kind:'ai', name: defB.belt + 'AI(後手)', strength: defB.strength, beltClass: defB.beltClass, aiTurnCount:0 };
+    conv.participants = [pA, pB];
+    conv.order = ['fighterA', 'fighterB'];
+    conv.turnCursor = 0;
+    conv.eliminated = new Set();
+    conv.winnerId = null;
+    conv.usedReadings = new Set();
+    conv.requiredKana = null;
+    conv.gameOver = false;
+    conv.cards = [];
+    conv.started = true;
+    usedReadings = conv.usedReadings; // アクティブな会話のショートカット参照を新しいSetに張り替える
+    renderChainFromHistory(conv);
+    updateMedallion();
+    renderContactList();
+    scheduleSpectatorStep(activeId);
+  }
   // 会話を切り替えたとき、保存しておいた履歴からチャットログを丸ごと再構築する。
   function renderChainFromHistory(conv){
     chainEl.innerHTML = '';
+    if(conv.kind === 'spectator' && !conv.started){
+      chainEl.appendChild(buildSpectatorSetupEl(conv));
+      return;
+    }
     if(conv.cards.length === 0){
-      const hint = conv.kind === 'spectator'
-        ? '<div class="kanban-mini">— 観戦 —</div>まもなくAI同士の対局が始まります。ながめていてください。'
-        : conv.kind === 'group'
-          ? '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。自分の番になると入力欄が使えます。<br>読みが「ん」で終わったら、その場で脱落です。'
-          : '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。';
+      const hint = conv.kind === 'group'
+        ? '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。自分の番になると入力欄が使えます。<br>読みが「ん」で終わったら、その場で脱落です。'
+        : '<div class="kanban-mini">— 対局開始 —</div>ひらがな・カタカナで、ことばを入力してください。<br>読みが「ん」で終わったら、その場で負けです。';
       chainEl.innerHTML = '<div class="empty-hint" id="emptyHint">' + hint + '</div>';
       return;
     }
@@ -362,11 +458,13 @@ import { parseTSV } from './tsv.js';
       else el = item.multi ? buildMultiGameOverEl(item) : buildGameOverEl(item);
       chainEl.appendChild(el);
     }
+    if(conv.kind === 'spectator' && conv.gameOver) chainEl.appendChild(buildSpectatorSetupEl(conv));
     scrollToBottom();
   }
 
   // ---------------- 連絡先(トーク)一覧 ----------------
   function contactPreview(conv){
+    if(conv.kind === 'spectator' && !conv.started) return '対戦相手を選んでください';
     for(let i = conv.cards.length - 1; i >= 0; i--){
       const item = conv.cards[i];
       if(item.kind === 'gameover'){
@@ -428,7 +526,9 @@ import { parseTSV } from './tsv.js';
     if(conv.autoplayTimer){ clearTimeout(conv.autoplayTimer); conv.autoplayTimer = null; }
   }
   function resumeSpectatorIfNeeded(id, conv){
-    if(conv.kind === 'spectator' && !conv.gameOver) scheduleSpectatorStep(id);
+    // startedがfalse(まだ対戦相手を選んでいない)ときは自動進行しない
+    // (ピッカーUIでの選択・「この対局を見る」を待つ)。
+    if(conv.kind === 'spectator' && conv.started && !conv.gameOver) scheduleSpectatorStep(id);
   }
   function selectContact(id){
     if(busy) return; // ターン処理中の切り替えは禁止(処理中の会話が宙に浮くのを避ける)
@@ -809,14 +909,14 @@ import { parseTSV } from './tsv.js';
   // このタブを見ている間だけ進行し、離れたら止まる(selectContact側でpause/resume)。
   function scheduleSpectatorStep(id){
     const conv = conversations.get(id);
-    if(!conv || conv.gameOver) return;
+    if(!conv || !conv.started || conv.gameOver) return;
     pauseSpectatorAutoplay(conv);
     conv.autoplayTimer = setTimeout(() => runSpectatorStep(id), 700);
   }
   async function runSpectatorStep(id){
     if(activeId !== id) return; // その間に別のトークへ移動していたら何もしない
     const conv = conversations.get(id);
-    if(!conv || conv.gameOver) return;
+    if(!conv || !conv.started || conv.gameOver) return;
     setBusy(true);
     const p = currentParticipant(conv);
     await runOneAiTurn(conv, p);
@@ -839,7 +939,7 @@ import { parseTSV } from './tsv.js';
     inputEl.disabled = disabled;
     submitBtn.disabled = disabled;
     inputEl.placeholder = conv.kind === 'spectator'
-      ? 'AI同士が対局中です(観戦専用)'
+      ? (conv.started ? 'AI同士が対局中です(観戦専用)' : '対戦相手を選んでください(観戦専用)')
       : (conv.kind === 'group' && !gameOver && !humanTurn ? (currentParticipant(conv).name + 'の番です…') : 'ことばを入力…');
   }
 

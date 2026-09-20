@@ -43,6 +43,11 @@ test('analyzeEnding: 小さい「っ」を含んでも語末が通常音なら�
   assert.deepEqual(analyzeEnding('しっぽ'), {kana:'ぽ', isN:false});
 });
 
+test('analyzeEnding: 小さい「っ」で終わる語は、次は大きい「つ」から始められる', () => {
+  assert.deepEqual(analyzeEnding('あっ'), {kana:'つ', isN:false});
+  assert.deepEqual(analyzeEnding('ハッ'), {kana:'つ', isN:false}); // カタカナのまま渡しても判定できる
+});
+
 test('analyzeEnding: 通常の語は最後の1文字がそのまま次の音になる', () => {
   assert.deepEqual(analyzeEnding('いぬ'), {kana:'ぬ', isN:false});
   assert.deepEqual(analyzeEnding('さくら'), {kana:'ら', isN:false});

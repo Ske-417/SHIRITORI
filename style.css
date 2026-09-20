@@ -251,8 +251,46 @@ main{
 /* グループチャット/観戦: 誰の発言か分かるよう、ふきだしの上に名前を出し、
    ボットごとに色分けする(1対1では相手は辞書番だけなので使わない)。 */
 .sender-name{font-size:11px; font-weight:700; margin-bottom:3px; color:var(--ink-faint);}
-.card.botA .sender-name, .card.sBotA .sender-name{color:#4C8BF5;}
-.card.botB .sender-name, .card.sBotB .sender-name{color:#F5A623;}
+.card.botA .sender-name, .card.fighterA .sender-name{color:#4C8BF5;} /* グループの辞書猫/観戦の先手 */
+.card.botB .sender-name, .card.fighterB .sender-name{color:#F5A623;} /* グループの辞書犬/観戦の後手 */
+/* 観戦: 対戦相手(帯)を選ぶピッカー。対局後にも同じ見た目で「選び直す」用途に出す。 */
+.spectator-setup{
+  align-self:center;
+  text-align:center;
+  background:var(--ai-bubble);
+  border:1px solid var(--line);
+  border-radius:18px;
+  padding:18px 20px;
+  margin:6px 0;
+  max-width:min(92%, 420px);
+}
+.spectator-setup-title{font-size:14px; font-weight:700; margin-bottom:12px;}
+.spectator-setup-row{display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap;}
+.spectator-setup-row select{
+  font:inherit;
+  font-size:12.5px;
+  padding:7px 8px;
+  border-radius:10px;
+  border:1px solid var(--line);
+  background:var(--surface);
+  color:var(--ink);
+  max-width:150px;
+}
+.spectator-setup-vs{font-size:12px; font-weight:700; color:var(--ink-faint);}
+.spectator-setup-note{font-size:11px; color:var(--ink-soft); margin-top:8px;}
+.spectator-setup-start{
+  margin-top:12px;
+  font:inherit;
+  font-size:13px;
+  font-weight:700;
+  color:#fff;
+  background:var(--accent);
+  border:none;
+  border-radius:999px;
+  padding:9px 22px;
+  cursor:pointer;
+}
+.spectator-setup-start:hover{opacity:.9;}
 /* 参加者の脱落(まだ決着していない)を知らせる、中央寄せの小さな通知。 */
 .elimination-note{
   align-self:center;

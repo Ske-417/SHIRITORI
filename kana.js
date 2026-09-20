@@ -31,6 +31,10 @@ export function analyzeEnding(readingRaw){
     return {kana: VOWEL_MAP[prev] || null, isN:false};
   }
   if(SMALL_YOON[last]) return {kana: SMALL_YOON[last], isN:false};
+  // 小さい「っ」で終わる語(例: 「あっ」)は、それ単体では次に続けられる音が
+  // 無い(「っ」から始まる語は実質存在しない)ため、次の人は元の大きい
+  // 「つ」から始められることにする(このアプリの緩和ルール)。
+  if(last === 'っ') return {kana:'つ', isN:false};
   return {kana:last, isN:false};
 }
 
