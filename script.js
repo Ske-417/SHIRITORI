@@ -710,8 +710,10 @@ import { parseTSV } from './tsv.js';
   // ため、勝ち筋がほぼ「相手の持ち駒切れ」頼みになってしまう。そこで、安全な手がまだ
   // 残っていても、対局が長引く(=辞書番の手数が増える)ほど少しずつ「ん」で終わる語を
   // うっかり選んでしまう確率を上げる。全難易度共通の仕様(ユーザー要望)。
-  const N_MISTAKE_PER_TURN = 0.004; // 辞書番の1手ごとに+0.4%
-  const N_MISTAKE_MAX = 0.18;       // 上限18%(対局45手あたりで頭打ち)
+  // (ユーザーからのフィードバックで上げすぎだったので半分程度に緩和:
+  //  0.4%/手→0.2%/手、上限18%→10%。「少しずつ上がる」という設計自体は維持する)
+  const N_MISTAKE_PER_TURN = 0.002; // 辞書番の1手ごとに+0.2%
+  const N_MISTAKE_MAX = 0.10;       // 上限10%(対局50手あたりで頭打ち)
   function pickAiMove(kana, strength, aiTurnCount){
     let pool = candidatesFor(kana, usedReadings);
     if(strength === 'easy') pool = pool.filter(EASY_VOCAB);
@@ -842,10 +844,14 @@ import { parseTSV } from './tsv.js';
     conv.requiredKana = ending.kana;
     advanceTurn(conv);
   }
+  const AI_THINK_MS = 900; // グループチャット(人間が見ている)での「考え中」表示の長さ
   // AI参加者1人分の手番をまるごと処理する(考え中表示→手を選ぶ→反映)。
-  async function runOneAiTurn(conv, participant){
+  // thinkMsを省略するとAI_THINK_MS(グループチャット用)を使う。観戦(AI同士)は
+  // 人間の入力待ちが無いテンポの良さが求められるため、呼び出し側で半分の
+  // 時間を明示的に渡す(ユーザー要望)。
+  async function runOneAiTurn(conv, participant, thinkMs){
     renderThinking('ai', participant.name);
-    await new Promise(r => setTimeout(r, 900));
+    await new Promise(r => setTimeout(r, thinkMs != null ? thinkMs : AI_THINK_MS));
     removeThinking();
     participant.aiTurnCount = (participant.aiTurnCount || 0) + 1;
     const move = conv.requiredKana
@@ -919,7 +925,7 @@ import { parseTSV } from './tsv.js';
     if(!conv || !conv.started || conv.gameOver) return;
     setBusy(true);
     const p = currentParticipant(conv);
-    await runOneAiTurn(conv, p);
+    await runOneAiTurn(conv, p, AI_THINK_MS / 2); // 観戦はAI同士なので考え中の待ち時間を半分にする
     updateMedallion();
     setBusy(false);
     if(activeId === id && !conv.gameOver) scheduleSpectatorStep(id);
