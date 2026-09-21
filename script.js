@@ -710,10 +710,10 @@ import { parseTSV } from './tsv.js';
   // ため、勝ち筋がほぼ「相手の持ち駒切れ」頼みになってしまう。そこで、安全な手がまだ
   // 残っていても、対局が長引く(=辞書番の手数が増える)ほど少しずつ「ん」で終わる語を
   // うっかり選んでしまう確率を上げる。全難易度共通の仕様(ユーザー要望)。
-  // (ユーザーからのフィードバックで上げすぎだったので半分程度に緩和:
-  //  0.4%/手→0.2%/手、上限18%→10%。「少しずつ上がる」という設計自体は維持する)
-  const N_MISTAKE_PER_TURN = 0.002; // 辞書番の1手ごとに+0.2%
-  const N_MISTAKE_MAX = 0.10;       // 上限10%(対局50手あたりで頭打ち)
+  // (ユーザーからのフィードバックで段階的に緩和: 0.4%/手→0.2%/手→0.1%/手。
+  //  上限は10%のまま据え置き。「少しずつ上がる」という設計自体は維持する)
+  const N_MISTAKE_PER_TURN = 0.001; // 辞書番の1手ごとに+0.1%
+  const N_MISTAKE_MAX = 0.10;       // 上限10%(対局100手あたりで頭打ち)
   function pickAiMove(kana, strength, aiTurnCount){
     let pool = candidatesFor(kana, usedReadings);
     if(strength === 'easy') pool = pool.filter(EASY_VOCAB);
